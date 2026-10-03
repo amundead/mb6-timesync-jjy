@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/mb6-timesync-banner.png" alt="MB6 TimeSync — G-SHOCK MULTI BAND 6 — ESP32 JJY 60 kHz" width="100%">
+  <img src="./mb6-timesync-banner.png" alt="MB6 TimeSync — G-SHOCK MULTI BAND 6" width="900">
 </p>
 
 <h1 align="center">MB6 TimeSync</h1>
