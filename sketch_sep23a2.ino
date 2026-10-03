@@ -20,8 +20,8 @@
 #include <sys/time.h>
 
 // Isi maklumat Wi-Fi sendiri sebelum upload.
-constexpr char WIFI_SSID[]="Nirvana-2.4Ghz";
-constexpr char WIFI_PASSWORD[]="nirv@n@7";
+constexpr char WIFI_SSID[]="Wifi-2.4Ghz";
+constexpr char WIFI_PASSWORD[]="Wifi12345";
 
 constexpr uint8_t TX_PIN=25;
 constexpr uint8_t PIN_SDA=21, PIN_SCL=22;
