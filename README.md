@@ -12,28 +12,31 @@ MB6 TimeSync mendapatkan masa melalui Wi-Fi dan NTP, kemudian menjana isyarat ma
 
 Nama repositori: [`amundead/mb6-timesync-jjy`](https://github.com/amundead/mb6-timesync-jjy).
 
-## Status projek — 15 Oktober 2026
+## Status projek — 16 Oktober 2026
 
 **Ujian pengguna berjaya: jam menunjukkan L3 semasa penerimaan dan GET selepas selesai sync pada jarak sekitar 4 meter.** Pengguna turut melaporkan penerimaan dari bilik lain dengan pintu tertutup. Ini ialah hasil ujian pada pemasangan dan keadaan rumah tersebut; jangkauan untuk pemasangan lain belum disahkan.
 
 Konfigurasi perkakasan terkini yang dilaporkan menggunakan **USB 5 V → MT3608 sekitar 12 V → litar LC selari**, dengan **transistor 2N2222**, **gelung 0.45–0.48 mH** dan **kapasitor 15 nF (153)**. Arus gelung, voltan puncak Collector dan ketahanan jangka panjang belum direkodkan.
 
-### Firmware dalam repo dan konfigurasi NTP terkini
+### Firmware dalam repo
 
 | Perkara | Status |
 | --- | --- |
-| Fail firmware dalam repo | [`sketch_sep23a2.ino`](./sketch_sep23a2.ino), masih berlabel **v0.4.1** ketika README ini dikemas kini |
-| NTP dalam fail repo tersebut | `ntp1.sirim.my` dan `ntp2.sirim.my` |
-| Konfigurasi terkini yang dipilih untuk versi v0.4.3 yang disediakan berasingan | **Utama:** `time.cloudflare.com`; **backup:** `my.pool.ntp.org` |
-| Logik versi v0.4.3 yang disediakan | Cuba backup selepas 30 saat tanpa respons; paparkan pelayan yang dicuba dan sumber sync pada Msg/Web UI, OLED dan Serial |
+| Fail firmware | [`sketch_sep23a2.ino`](./sketch_sep23a2.ino), **v0.4.3** daripada fail lampiran pengguna |
+| NTP utama | **Cloudflare:** `time.cloudflare.com` |
+| NTP backup | **MY Pool:** `my.pool.ntp.org` |
+| Fallback | Jika Cloudflare tiada respons selepas **30 saat**, cuba MY Pool selama 30 saat. Jika kedua-duanya gagal, tunggu **120 saat** sebelum mencuba semula dari Cloudflare. |
+| Paparan NTP | Msg/Web UI, OLED dan Serial menunjukkan pelayan yang sedang dicuba serta sumber sync terakhir |
 | Tempoh dan jadual | Auto **8 minit**, Manual **10 minit**; 23:59, 01:59 dan 03:59 waktu Malaysia |
+| Wi-Fi / sleep | Wi-Fi kekal aktif; `WiFi.setSleep(false)`. Perubahan modem sleep / deep sleep **ditangguhkan**. |
+| Pengesahan | Kandungan fail dan tetapan disemak; versi dalam commit ini belum di-compile atau dimuat naik ke board dalam sesi kemas kini ini. |
 
-Penerangan Cloudflare/MY Pool merujuk kepada versi baharu yang disediakan berasingan. Fail `.ino` dalam repo perlu dikemas kini kepada versi tersebut untuk mendapat fungsi itu; perubahan README sahaja tidak menukar pelayan NTP dalam firmware.
+Firmware repo kini menggunakan Cloudflare/MY Pool, menggantikan konfigurasi SIRIM lama. Ia menggunakan **NTP/SNTP biasa, bukan NTS**. SSID dan kata laluan dalam versi GitHub ialah placeholder yang perlu diisi sebelum upload.
 
 ## Ciri utama
 
 - Pembawa nominal **60 kHz** melalui GPIO25.
-- Masa NTP melalui Wi-Fi; konfigurasi terkini yang dipilih ialah **Cloudflare utama / MY Pool backup**. Semak jadual versi firmware di atas untuk kandungan fail repo.
+- Masa NTP melalui Wi-Fi, dengan **Cloudflare utama / MY Pool backup** dan paparan sumber NTP.
 - OLED I2C **1.3 inci, 128 × 64**, menggunakan pemacu SH1106 dan pustaka Adafruit SH110X.
 - Paparan masa Malaysia, status Wi-Fi/NTP, mod operasi, status TX, alamat IP dan jadual seterusnya.
 - Ikon Wi-Fi, masa/NTP dan antena pada OLED.
@@ -49,15 +52,17 @@ Penerangan Cloudflare/MY Pool merujuk kepada versi baharu yang disediakan berasi
 
 | Bil | Komponen | Spesifikasi / Kod | Fungsi & Titik Sambungan pada Papan Ekspansi |
 | --- | --- | --- | --- |
-| **1** | **Mikropengawal & Papan Ekspansi** | **ESP32 Dev Board (32-pin) + 32-pin Expansion Board**, mengikut spesifikasi pemasangan pengguna | Hab kawalan dan agihan kuasa/isyarat. Input USB Micro 5 V melalui papan ekspansi; D25 ialah isyarat 3.3 V. |
-| **2** | **Modul Peningkat Voltan** | **MT3608 (Boost Converter)** | VIN+ → terminal 5 V tetap; VIN− → GND bersama; VOUT+ sekitar 12 V → hujung pertama LC. VOUT− berkongsi GND. |
-| **3** | **Transistor NPN** | **2N2222**; fungsi kaki B/C/E disahkan mengikut datasheet unit sebenar | Suis elektronik *low-side*: Base menerima D25 melalui resistor; Collector → hujung kedua LC; Emitter → GND berdekatan baris D25. |
-| **4** | **Perintang (Resistor)** | **1 kΩ** | Dipasang bersiri **D25, pin S → resistor → Base**. Tidak mengehadkan arus gelung secara langsung. |
-| **5** | **Gegelung Antena (Induktor L1)** | **Rod ferrit 10 × 100 mm**, dawai enamel **AWG 26**; L1 terkini sekitar **0.45–0.48 mH** | Membentuk medan magnet pada pembawa 60 kHz. Dipasang antara VOUT+ dan Collector; panjang wayar/lilitan konfigurasi terkini belum direkodkan. |
-| **6** | **Kapasitor Tangki LC** | **15 nF**, kod **153** | Selari dengan gelung, antara VOUT+ dan Collector; menghasilkan resonans ideal **hampir 60 kHz** untuk julat L1 tersebut. |
-| **7** | **Paparan Status OLED** | **1.3 inci, IIC/I2C, 128 × 64, SH1106** | **VCC → 3.3 V; GND → GND bersama; SDA → D21; SCL/SCK → D22**. |
+| **1** | **Mikropengawal & Papan Ekspansi** | **ESP32 Dev Board (32-pin) + 32-pin Expansion Board**, mengikut pemasangan pengguna | Hab kawalan dan agihan kuasa/isyarat. D25 ialah isyarat logik 3.3 V. |
+| **2** | **Modul Peningkat Voltan** | **MT3608 (Boost Converter)** | VIN+ → 5 V USB; VIN−/VOUT− → GND bersama; VOUT+ sekitar 12 V → litar antena. |
+| **3** | **Transistor NPN** | **2N2222** | Suis elektronik *low-side* untuk kawalan isyarat 60 kHz. Sahkan kaki B/C/E mengikut datasheet unit sebenar. |
+| **4** | **Perintang Transistor** | **1 kΩ** | Bersiri antara **simpang D25 → resistor 1 kΩ → Base** 2N2222. |
+| **5** | **Perintang LED** | **330 Ω** | Bersiri antara **simpang D25 → resistor 330 Ω → anoda (+) LED**. |
+| **6** | **LED Indikator** | **LED standard**, warna mengikut pilihan | Mengikuti aktiviti D25; kelipan yang kelihatan ialah sampul denyutan kod masa, bukan pembawa 60 kHz secara langsung. Katoda (−) → GND. |
+| **7** | **Gegelung Antena (Induktor L1)** | **Rod ferrit 10 × 100 mm**, dawai enamel **AWG 26**; L1 sekitar **0.45–0.48 mH** | Teras pemancar medan magnet 60 kHz. Dipasang antara VOUT+ dan Collector. |
+| **8** | **Kapasitor Tangki LC** | **15 nF**, kod **153** | Selari dengan gelung, antara VOUT+ dan Collector, untuk resonans ideal **hampir 60 kHz**. |
+| **9** | **Paparan Status OLED** | **1.3 inci, IIC/I2C, 128 × 64, SH1106** | **VCC → 3.3 V; GND → GND bersama; SDA → D21; SCL/SCK → D22**. |
 
-Peralatan pemasangan tambahan: donut board/perfboard berpad berasingan, terminal skru 2-pin, wayar penghubung dan penyambung yang sepadan. LED dengan resistor 330 Ω ialah indikator pilihan; ia bukan sebahagian daripada tujuh komponen utama di atas.
+Peralatan pemasangan tambahan: donut board/perfboard berpad berasingan, terminal skru 2-pin, wayar penghubung dan penyambung yang sepadan. Kedua-dua resistor adalah komponen berasingan; cabang LED tidak menggantikan resistor Base.
 
 Bekalan masuk sistem ialah **USB Micro 5 V pada papan ekspansi 32-pin**. Jumper VCC papan ditetapkan kepada **3.3 V untuk OLED**; sahkan menggunakan label dan ukuran voltan papan sebenar. MT3608 menaikkan voltan untuk **cabang antena sahaja** kepada sekitar 12 V; ESP32 kekal menggunakan USB 5 V dan OLED menggunakan 3.3 V. Pilih expansion board dengan bilangan pin, jarak soket dan susunan pin yang benar-benar sepadan dengan ESP32; jangan paksa board yang tidak sepadan ke soket.
 
@@ -80,39 +85,95 @@ Firmware mencuba alamat I2C `0x3C` dan `0x3D`. Jumper VCC expansion board kekal 
 
 **Model paparan telah disahkan pengguna:** OLED **SH1106 1.3 inci, 128 × 64**. Gunakan `Adafruit_SH1106G` daripada pustaka Adafruit SH110X seperti dalam firmware repo.
 
-### Pemacu antena 12 V dan LC selari
+### 1. Sumber kuasa dan papan ekspansi
 
-Jadual berikut ialah peta sambungan elektrik prototaip yang diterangkan pengguna. Ia bukan pengesahan bahawa had arus dan voltan semua komponen telah diuji.
-
-| Dari / titik | Ke |
+| Dari / tetapan | Sambungan |
 | --- | --- |
-| USB / pin 5 V tetap | MT3608 VIN+ |
-| GND ESP32 | MT3608 VIN− dan VOUT−, serta GND bersama |
-| GPIO25 / D25, pin S | Resistor 1 kΩ → **Base (B)** |
-| **Emitter (E)** | GND bersama |
-| MT3608 **VOUT+ ≈12 V**, titik **T1** | Hujung pertama gelung **dan** kaki pertama kapasitor 15 nF |
-| **Collector (C)**, titik **T2** | Hujung kedua gelung **dan** kaki kedua kapasitor 15 nF |
-| OLED GND | GND bersama |
+| USB Micro 5 V | Port USB kuasa pada papan ekspansi 32-pin |
+| Jumper papan | Rujukan VCC **3.3 V untuk OLED**, disahkan mengikut label dan ukuran papan |
+| Terminal 5 V tetap | Bekalan input MT3608; berasingan daripada VCC yang dipilih jumper |
 
-**Gelung dan kapasitor selari antara T1 (VOUT+) dan T2 (Collector).** Base, Emitter dan Collector ialah tiga titik berasingan. Collector tidak disambung terus ke GND, dan Base hanya menerima isyarat D25 melalui resistor 1 kΩ.
+### 2. Modul peningkat voltan MT3608
+
+| Pin MT3608 | Sambungan |
+| --- | --- |
+| VIN+ | Terminal 5 V tetap USB pada papan ekspansi |
+| VIN− | GND bersama |
+| VOUT+ | Sekitar **12 V**, titik **T1** litar LC |
+| VOUT− | GND bersama |
+
+### 3. Litar resonans LC selari
+
+| Titik | Komponen yang bersambung |
+| --- | --- |
+| **T1: VOUT+ sekitar 12 V** | Hujung pertama gelung **dan** kaki pertama kapasitor 15 nF |
+| **T2: Collector 2N2222** | Hujung kedua gelung **dan** kaki kedua kapasitor 15 nF |
+
+Gelung dan kapasitor berkongsi **dua titik yang sama, T1 dan T2**. Kedua-duanya selari, dan tiada kaki kapasitor disambung terus ke GND.
+
+### 4. Percabangan isyarat D25
+
+Bina satu simpang pateri pada donut board yang menyatukan **wayar D25**, **kaki 1 resistor 1 kΩ** dan **kaki 1 resistor 330 Ω**.
+
+| Cabang dari simpang D25 | Destinasi |
+| --- | --- |
+| Resistor **1 kΩ**, kaki 1 → kaki 2 | **Base (B)** 2N2222 sahaja |
+| Resistor **330 Ω**, kaki 1 → kaki 2 | **Anoda (+)** LED indikator |
 
 ```mermaid
 flowchart TD
-    P5["USB 5 V"] --> BOOST["MT3608"]
-    BOOST --> P12["T1: VOUT+ sekitar 12 V"]
-    P12 --> L["Gelung 0.45–0.48 mH"]
-    P12 --> CAP["Kapasitor 15 nF"]
-    L --> T2["T2: Collector"]
-    CAP --> T2
-    T2 -->|C| Q["2N2222"]
-    D25["GPIO25: isyarat 3.3 V"] --> R1["Resistor 1 kΩ"]
-    R1 -->|B| Q
-    Q -->|E| G["GND bersama"]
+    D25["GPIO25: isyarat 3.3 V"] --> J["Simpang pateri D25"]
+    J --> R1["Resistor 1 kΩ"]
+    J --> R2["Resistor 330 Ω"]
+    R1 --> B["Base 2N2222"]
+    R2 --> LED["Anoda LED"]
+    LED --> G["Katoda ke GND bersama"]
 ```
 
-Rajah menunjukkan hubungan fungsi, bukan susunan kaki fizikal transistor. Semua GND ESP32, boost converter dan OLED berkongsi rujukan yang sama. Sahkan pinout daripada nombor penuh dan pengeluar transistor sebenar; nama “2N2222” tidak menjamin urutan kaki untuk semua varian.
+### 5. Transistor 2N2222 dan LED indikator
 
-LED indikator adalah pilihan: **D25 → resistor 330 Ω → anoda LED; katoda LED → GND**. Ia menunjukkan aktiviti GPIO25, bukan pengukuran kekuatan medan atau pengesahan GET.
+| Kaki | Sambungan |
+| --- | --- |
+| Base (B) | Kaki 2 resistor 1 kΩ |
+| Collector (C) | **T2**, hujung kedua LC; **tiada sambungan terus ke GND** |
+| Emitter (E) | Rel GND bersama |
+| Anoda (+) LED | Kaki 2 resistor 330 Ω |
+| Katoda (−) LED | Rel GND bersama |
+
+Base, Collector dan Emitter ialah tiga titik elektrik berasingan. Sahkan pinout daripada nombor penuh dan pengeluar transistor sebenar; rajah ini merujuk kepada fungsi kaki, bukan urutan fizikalnya.
+
+```mermaid
+flowchart TD
+    T1["T1: VOUT+ sekitar 12 V"] --> L["Gelung 0.45–0.48 mH"]
+    T1 --> C["Kapasitor 15 nF"]
+    L --> T2["T2: Collector"]
+    C --> T2
+    T2 --> Q["2N2222: laluan Collector–Emitter"]
+    Q --> G["Emitter ke GND bersama"]
+```
+
+### 6. Rel ground bersama
+
+Satukan titik berikut pada rujukan GND yang sama:
+
+- **Katoda (−) LED indikator**.
+- **Emitter (E) transistor 2N2222**.
+- **Wayar GND ESP32**, contohnya pin GND berdekatan baris D25 pada papan ekspansi.
+- **MT3608 VIN− dan VOUT−**.
+- **OLED GND**.
+
+Pada donut board, gunakan cantuman pateri atau wayar penghubung yang kemas. Semua pad berasingan sehingga disambungkan secara fizikal.
+
+### 7. Paparan OLED 1.3 inci SH1106
+
+| Pin OLED | Sambungan pada papan ekspansi |
+| --- | --- |
+| VCC | Pin V yang telah disahkan **3.3 V**, atau pin 3V3 tetap |
+| GND | GND bersama |
+| SDA | D21, pin isyarat S |
+| SCL / SCK | D22, pin isyarat S |
+
+LED menunjukkan aktiviti GPIO25, bukan ukuran kekuatan medan atau pengesahan GET pada jam. Pemancaran 60 kHz terlalu pantas untuk dilihat sebagai kelipan individu.
 
 ### Penalaan LC untuk 60 kHz
 
@@ -160,17 +221,17 @@ Tetapkan dua terminal antena sebagai **T1 = VOUT+ MT3608 sekitar 12 V** dan **T2
 
    Letakkan kaki pertama resistor pada titik input D25. Sambungkan kaki kedua resistor ke **Base (B)** dengan pateri atau wayar pendek. Meletakkan kaki pada lubang bersebelahan sahaja tidak membuat sambungan.
 
-4. **Jika menggunakan indikator pilihan, pasang resistor 330 Ω dan LED.**
+4. **Pasang resistor 330 Ω dan LED indikator.**
 
    Letakkan kaki pertama resistor pada titik input D25. Sambungkan kaki kedua ke **anoda (+)** LED. Pada LED baharu, anoda biasanya kaki panjang; katoda biasanya kaki pendek dan sisi badan yang rata. Jika kaki sudah dipotong, sahkan polariti menggunakan datasheet atau mod diode multimeter.
 
 5. **Bina percabangan isyarat D25.**
 
-   Di sisi pateri, cantumkan **wayar input D25** dan **kaki pertama resistor 1 kΩ**; tambah **kaki pertama resistor 330 Ω** jika menggunakan LED pada satu titik elektrik yang sama. Jangan cantumkan titik ini terus ke Base tanpa resistor.
+   Di sisi pateri, cantumkan **wayar input D25**, **kaki pertama resistor 1 kΩ** dan **kaki pertama resistor 330 Ω** pada satu titik elektrik yang sama. Jangan cantumkan titik ini terus ke Base tanpa resistor.
 
 6. **Bina sambungan GND bersama.**
 
-   Cantumkan **Emitter (E)** dan **wayar GND bersama ESP32/MT3608**. Jika LED dipasang, cantumkan **katoda (−) LED** pada GND yang sama. Gunakan wayar penghubung jika titik-titik itu berjauhan; elakkan timbunan timah yang mudah menyentuh pad lain.
+   Cantumkan **Emitter (E)** dan **wayar GND bersama ESP32/MT3608**. Cantumkan **katoda (−) LED** pada GND yang sama. Gunakan wayar penghubung jika titik-titik itu berjauhan; elakkan timbunan timah yang mudah menyentuh pad lain.
 
 7. **Sambungkan Collector ke terminal antena.**
 
@@ -223,7 +284,7 @@ Tetapkan dua terminal antena sebagai **T1 = VOUT+ MT3608 sekitar 12 V** dan **T2
 
 14. **Semak sambungan menggunakan multimeter.**
 
-    Dengan USB dicabut, semak keterusan setiap laluan yang sepatutnya bersambung: T1 ke VOUT+ MT3608, T2 ke Collector dan GND ke Emitter/katoda LED. Pastikan kapasitor 15 nF merentasi T1/T2 dan tiada jambatan terus daripada T2 ke GND. Semak D25 ke resistor 1 kΩ dan hujung resistor ke Base. Jika LED dipasang, semak juga cabang resistor 330 Ω ke anoda LED.
+    Dengan USB dicabut, semak keterusan setiap laluan yang sepatutnya bersambung: T1 ke VOUT+ MT3608, T2 ke Collector dan GND ke Emitter/katoda LED. Pastikan kapasitor 15 nF merentasi T1/T2 dan tiada jambatan terus daripada T2 ke GND. Semak D25 ke resistor 1 kΩ dan hujung resistor ke Base. Semak juga cabang resistor 330 Ω ke anoda LED.
 
     Periksa juga tiada jambatan pateri terus antara laluan **12 V, 5 V, 3.3 V, GND dan D25**. Bacaan melalui resistor atau semikonduktor tidak semestinya bermaksud litar pintas; periksa laluan dan gunakan mod rintangan/diode apabila perlu. Ukur bekalan 3.3 V, 5 V dan output MT3608 sekitar 12 V menggunakan **mod voltan DC**, bukan mod keterusan pada litar berkuasa.
 
@@ -237,7 +298,7 @@ Tetapkan dua terminal antena sebagai **T1 = VOUT+ MT3608 sekitar 12 V** dan **T2
 
 Gunakan Arduino IDE dengan:
 
-- Pakej **esp32 by Espressif Systems**, siri **3.x** untuk firmware v0.4.1 dalam repo dan versi v0.4.3 yang disediakan berasingan.
+- Pakej **esp32 by Espressif Systems**, siri **3.x** untuk firmware **v0.4.3** dalam repo.
 - **Adafruit GFX Library**.
 - **Adafruit SH110X**.
 - **Adafruit BusIO**, jika diminta sebagai dependency.
@@ -280,7 +341,7 @@ Semua waktu jadual berikut ialah **waktu Malaysia, UTC+8**. Waktu tamat ialah pe
 | Auto | 03:59 | 04:07 | 8 minit |
 | Manual | Minit penuh seterusnya selepas arahan diterima | 10 minit selepas mula | 10 minit |
 
-Dalam kod v0.4.1, jadual mula dinyatakan sebagai minit selepas tengah malam:
+Dalam kod v0.4.3, jadual mula dinyatakan sebagai minit selepas tengah malam:
 
 ```cpp
 constexpr int AUTO_START_MINUTES[] = {1439, 119, 239};
@@ -296,11 +357,11 @@ Kejayaan penerimaan pada jam tidak membatalkan jadual berikutnya secara automati
 | --- | --- |
 | Masa OLED dan Web UI | Malaysia, UTC+8 |
 | Jadual Auto | Malaysia, UTC+8 |
-| Data masa dalam bingkai JJY firmware v0.4.1 | Jepun, JST / UTC+9 |
+| Data masa dalam bingkai JJY firmware v0.4.3 | Jepun, JST / UTC+9 |
 
 Tetapan Home City dan penerimaan radio bergantung pada model jam. Semak manual jam sebelum menukar bandar. Jika jam ditetapkan ke Tokyo, data JST biasa akan menghasilkan masa Tokyo, iaitu satu jam mendahului Malaysia.
 
-Pengubahsuaian khas untuk menghantar masa Malaysia kepada jam yang ditetapkan ke Tokyo perlu dibuat pada pengekodan payload. Ia **bukan tetapan lalai** firmware v0.4.1 yang dirujuk dalam README ini.
+Pengubahsuaian khas untuk menghantar masa Malaysia kepada jam yang ditetapkan ke Tokyo perlu dibuat pada pengekodan payload. Ia **bukan tetapan lalai** firmware v0.4.3 yang dirujuk dalam README ini.
 
 ## Penggunaan Web UI
 
@@ -342,7 +403,7 @@ Web UI ini digunakan pada rangkaian setempat; elakkan mendedahkannya terus kepad
 | `TX:ERROR` | Terdapat masalah pengawalan output |
 | `Next` | Jadual mula auto seterusnya dalam waktu Malaysia |
 
-Firmware v0.4.1 meminta NTP setiap satu jam dan menggunakan had usia masa dua jam. Paparan status TX datang daripada keadaan firmware, bukan sensor RF atau pengukuran antena.
+Firmware v0.4.3 meminta NTP setiap satu jam dan menggunakan had usia masa dua jam. Paparan status TX datang daripada keadaan firmware, bukan sensor RF atau pengukuran antena.
 
 ## Ujian dengan jam
 
@@ -379,6 +440,12 @@ Rekod ini berdasarkan laporan pengguna. Model jam untuk ujian terkini, orientasi
 | Web UI tidak boleh dibuka | Semak IP semasa, rangkaian setempat dan pengasingan peranti pada guest Wi-Fi |
 | Transistor menjadi panas | Hentikan TX dan putuskan kuasa; ukur arus gelung dan semak reka bentuk pemacu |
 
+## Kuasa dan mod sleep
+
+Firmware v0.4.3 ini mengekalkan Wi-Fi aktif dengan `WiFi.setSleep(false)`. Web UI boleh dicapai ketika idle dan Auto OFF. **Modem sleep dan deep sleep belum ditambah; kemas kini sleep ditangguhkan atas pilihan pengguna.**
+
+ESP32 boleh dimatikan pada suis USB atau dengan mencabut kabel tanpa urutan shutdown seperti PC. Elakkan memutuskan kuasa ketika flashing atau menyimpan tetapan. Apabila dihidupkan semula, firmware bermula dari awal, memulihkan tetapan Auto yang tersimpan dan mendapatkan masa NTP. Sesi manual yang sedang berjalan tidak disambung semula selepas reboot.
+
 ## Skop dan pembangunan seterusnya
 
 Projek ini menjana isyarat **gaya JJY pada 60 kHz**. Nama MB6 merujuk kepada sasaran jam; firmware ini tidak menyediakan semua protokol yang disokong Casio Multi Band 6.
@@ -390,7 +457,7 @@ Perkara yang boleh dibangunkan seterusnya:
 - Pengukuran arus gelung dan voltan Collector, serta pengesahan perlindungan lonjakan.
 - Pengesahan tala LC pada 60 kHz dalam pemasangan sebenar, termasuk toleransi kapasitor dan kesan ferrit.
 - Log sesi pancaran dan catatan kejayaan jam yang dimasukkan oleh pengguna.
-- Deep sleep dengan bangun sebelum jadual; fungsi ini belum tersedia dalam firmware rujukan.
+- Modem sleep / deep sleep: **ditangguhkan**; perlu menilai kesan terhadap akses manual melalui Web UI sebelum pelaksanaan.
 - Catatan konsistensi auto sync, konfigurasi akhir antena, dan pemasangan casing dengan sambungan yang kemas.
 
 ## Rujukan

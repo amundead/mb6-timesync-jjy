@@ -1,12 +1,18 @@
-/* MB6 TimeSync v0.4.1 - original ESP32-WROOM, Arduino ESP32 3.x.
- * USB power only. Disconnect TB6612 and external 5V.
- * D25 -> R1 1k -> node A. Coil: node A -> GND.
- * R2 1k: node A -> GND (parallel with coil).
- * OLED: VCC 3V3, GND, SDA21, SCL22.
+/* MB6 TimeSync v0.4.3 - original ESP32-WROOM, Arduino ESP32 3.x.
+ * USB 5V powers ESP32/expansion board and MT3608 input.
+ * GPIO25 (3.3V) junction -> 1k resistor -> 2N2222 Base.
+ * Same junction -> 330 ohm resistor -> LED anode; cathode -> common GND.
+ * 2N2222 Emitter -> common GND; Collector -> LC node T2.
+ * MT3608 VOUT+ (~12V) -> LC node T1. Coil and 15nF capacitor in parallel
+ * between T1 and T2. Collector is NOT wired directly to GND.
+ * Verify transistor pinout, coil current and Collector peak voltage.
+ * OLED SH1106 1.3": VCC 3V3, GND, SDA21, SCL22.
  * WiFi stays ON. Auto windows: 8 minutes. Manual: 10 minutes.
+ * Sleep changes are deferred. Fill WiFi placeholders locally before upload.
  */
 #include <Arduino.h>
 #include <initializer_list>
+#include <cstring>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
@@ -20,8 +26,8 @@
 #include <sys/time.h>
 
 // Isi maklumat Wi-Fi sendiri sebelum upload.
-constexpr char WIFI_SSID[]="Wifi-2.4Ghz";
-constexpr char WIFI_PASSWORD[]="Wifi12345";
+constexpr char WIFI_SSID[]="NAMA_WIFI_2_4GHZ";
+constexpr char WIFI_PASSWORD[]="KATA_LALUAN_WIFI";
 
 constexpr uint8_t TX_PIN=25;
 constexpr uint8_t PIN_SDA=21, PIN_SCL=22;
@@ -30,8 +36,10 @@ constexpr int AUTO_TX_MINUTES=8;
 constexpr int MANUAL_TX_MINUTES=10;
 constexpr int64_t MAX_NTP_AGE_US=2LL*3600*1000000;
 constexpr uint32_t NTP_INTERVAL_MS=3600000;
-constexpr char NTP_SERVER_1[]="ntp1.sirim.my";
-constexpr char NTP_SERVER_2[]="ntp2.sirim.my";
+constexpr char NTP_SERVER_1[]="time.cloudflare.com";
+constexpr char NTP_SERVER_2[]="my.pool.ntp.org";
+constexpr int64_t NTP_ATTEMPT_US=30LL*1000000;
+constexpr int64_t NTP_RETRY_US=120LL*1000000;
 // Jadual Auto ikut waktu Malaysia UTC+8; kandungan JJY ikut JST UTC+9.
 
 #include <stdint.h>
@@ -180,6 +188,8 @@ struct SharedState {
   bool synced=false, autoEnabled=false, inhibit=false, outputFault=false;
   int64_t lastSyncMono=0, lastSyncUtc=0, manualStart=0, manualUntil=0;
   uint32_t generation=0, appliedGeneration=0;
+  uint32_t ntpSyncCount=0;
+  uint8_t ntpSource=0; // 0=none, 1=Cloudflare, 2=MY Pool; last successful reply.
   jjy::Output tx;
 };
 
@@ -211,6 +221,41 @@ Preferences prefs;
 bool oledOk=false, hardwareOk=false, prefsOk=false, saveOk=true;
 uint32_t lastScreen=0,lastReconnect=0;
 String csrfToken;
+uint8_t ntpAttempt=0;
+uint32_t ntpSyncSeen=0,ntpEvent=0;
+int64_t ntpAttemptStarted=0,ntpNextAttempt=0;
+bool ntpWiFiWasConnected=false;
+String ntpMessage="NTP: waiting for WiFi.";
+
+const char *ntpSourceName(uint8_t source) {
+  return source==1?"Cloudflare":source==2?"MY Pool":"--";
+}
+const char *ntpServerName(uint8_t source) {
+  return source==1?NTP_SERVER_1:source==2?NTP_SERVER_2:"--";
+}
+void setNtpMessage(const String &message) {
+  ntpMessage=message;
+  ++ntpEvent;
+  Serial.println(message);
+}
+void stopNtpClient() {
+  esp_sntp_stop();
+  // setservername uses a synchronous tcpip_api_call: wait until the queued
+  // stop (and any preceding callback) has finished before another attempt.
+  esp_sntp_setservername(0,nullptr);
+  ntpAttempt=0;
+}
+void startNtpAttempt(uint8_t source) {
+  stopNtpClient();
+  ntpAttempt=source;
+  ntpAttemptStarted=esp_timer_get_time();
+  setNtpMessage(String(source==2?"Cloudflare timeout; NTP connecting: ":
+                                "NTP connecting: ")+
+                ntpSourceName(source)+" ("+ntpServerName(source)+").");
+  // One configured server per attempt makes the responding source unambiguous.
+  // Cloudflare is tried first; MY Pool is the backup after 30 seconds.
+  configTime(0,0,ntpServerName(source),nullptr,nullptr);
+}
 
 // Ikon kecil pada baris tajuk OLED 128x64.
 void drawWiFiIcon(int x,int y) {
@@ -269,13 +314,60 @@ bool trusted(const SharedState &s,int64_t mono) {
 }
 void onNtp(struct timeval *tv) {
   if(!tv || tv->tv_sec<1704067200LL || tv->tv_sec>=4102444800LL) return;
+  // This callback runs on the lwIP thread. Slot 0 is the only configured
+  // server; read it here, rather than guessing from the server tried in loop().
+  const char *serverName=esp_sntp_getservername(0);
+  const uint8_t source=serverName && strcmp(serverName,NTP_SERVER_1)==0?1:
+    serverName && strcmp(serverName,NTP_SERVER_2)==0?2:0;
+  if(!source)return;
   const int64_t mono=esp_timer_get_time();
   portENTER_CRITICAL(&stateMux);
   shared.synced=true;
   shared.lastSyncMono=mono;
   shared.lastSyncUtc=tv->tv_sec;
+  shared.ntpSource=source;
+  ++shared.ntpSyncCount;
   ++shared.generation;
   portEXIT_CRITICAL(&stateMux);
+}
+void serviceNtp() {
+  const bool connected=WiFi.status()==WL_CONNECTED;
+  const int64_t mono=esp_timer_get_time();
+  if(!connected) {
+    if(ntpWiFiWasConnected) {
+      stopNtpClient();
+      setNtpMessage("NTP: waiting for WiFi.");
+    }
+    ntpWiFiWasConnected=false;
+    return;
+  }
+  if(!ntpWiFiWasConnected) {
+    ntpWiFiWasConnected=true;
+    ntpNextAttempt=0;
+  }
+  const SharedState s=snapshot();
+  if(s.ntpSyncCount!=ntpSyncSeen) {
+    stopNtpClient();
+    const SharedState latest=snapshot();
+    ntpSyncSeen=latest.ntpSyncCount;
+    ntpNextAttempt=mono+static_cast<int64_t>(NTP_INTERVAL_MS)*1000;
+    setNtpMessage(String("NTP synced: ")+ntpSourceName(latest.ntpSource)+
+      " ("+ntpServerName(latest.ntpSource)+").");
+    return;
+  }
+  if(ntpAttempt && mono-ntpAttemptStarted>=NTP_ATTEMPT_US) {
+    const uint8_t previous=ntpAttempt;
+    stopNtpClient();
+    // A reply can arrive while stopping. Process it before switching servers.
+    if(snapshot().ntpSyncCount!=ntpSyncSeen)return;
+    if(previous==1)startNtpAttempt(2);
+    else {
+      ntpNextAttempt=mono+NTP_RETRY_US;
+      setNtpMessage("NTP: Cloudflare + MY Pool timeout; retry in 120s.");
+    }
+  } else if(!ntpAttempt && mono>=ntpNextAttempt) {
+    startNtpAttempt(1);
+  }
 }
 void onEnvelope(void *) {
   static bool gateWasOn=false;
@@ -395,12 +487,14 @@ String action(const String &name) {
   if(name=="ntp") {
     if(WiFi.status()!=WL_CONNECTED)
       return "ERROR: WiFi disconnected.";
+    stopNtpClient();
     portENTER_CRITICAL(&stateMux);
+    ntpSyncSeen=shared.ntpSyncCount;
     shared.synced=false;
     ++shared.generation;
     portEXIT_CRITICAL(&stateMux);
-    sntp_restart();
-    return "NTP requested; TX waits for fresh time and next minute.";
+    startNtpAttempt(1);
+    return ntpMessage+" TX waits for fresh time and next minute.";
   }
   return "ERROR: unknown command.";
 }
@@ -413,10 +507,15 @@ String statusJson() {
   const int64_t remain=manual?
     (s.manualUntil-(mono<s.manualStart?s.manualStart:mono)+999999)/1000000:0;
   String j;
-  j.reserve(900);
+  j.reserve(1200);
   j="{\"time\":\""+(s.synced?myTime(utc,true):String("--"))+"\"";
   j+=",\"wifi\":"+String(WiFi.status()==WL_CONNECTED?"true":"false");
   j+=",\"ntp\":"+String(trusted(s,mono)?"true":"false");
+  j+=",\"ntpSource\":\""+String(ntpSourceName(s.ntpSource))+"\"";
+  j+=",\"ntpServer\":\""+String(ntpServerName(s.ntpSource))+"\"";
+  j+=",\"ntpTarget\":\""+String(ntpSourceName(ntpAttempt))+"\"";
+  j+=",\"ntpMsg\":\""+ntpMessage+"\"";
+  j+=",\"ntpEvent\":"+String(ntpEvent);
   j+=",\"hardware\":"+String(hardwareOk && !s.outputFault?"true":"false");
   j+=",\"auto\":"+String(s.autoEnabled?"true":"false");
   j+=",\"manual\":"+String(manual?"true":"false");
@@ -468,10 +567,12 @@ input{width:25px;height:25px;accent-color:#58d4be}
 <path d="M9 21h6"></path>
 <path d="M8.4 7.4a5 5 0 0 1 7.2 0"></path>
 </svg></h1>
-<small>JJY 60 kHz &middot; SIRIM NTP &middot; Malaysia UTC+8 &middot; v0.4.1</small>
+<small>JJY 60 kHz &middot; Cloudflare / MY Pool NTP &middot; Malaysia UTC+8 &middot; v0.4.3</small>
 <p id="connection">Connecting...</p><section>
 <div id="clock">--</div><dl>
 <dt>Wi-Fi / NTP</dt><dd id="net">--</dd>
+<dt>NTP connecting</dt><dd id="ntpTarget">--</dd>
+<dt>Last NTP source</dt><dd id="ntpSource">--</dd>
 <dt>Mode</dt><dd id="mode">--</dd><dt>TX</dt><dd id="tx">--</dd>
 <dt>Next auto slot</dt><dd id="next">--</dd>
 <dt>Last NTP (MY)</dt><dd id="lastNtp">--</dd>
@@ -497,6 +598,7 @@ Kawalan untuk rangkaian rumah sahaja.</small>
 const token="__TOKEN__";
 const el=id=>document.getElementById(id);
 let busy=false,refreshing=false;
+let lastNtpEvent=null;
 function disableAll(){["auto","start","stop","ntp"].forEach(id=>el(id).disabled=true)}
 async function request(path,options={}){
  const controller=new AbortController();
@@ -516,6 +618,13 @@ async function refresh(){
   el("clock").textContent=s.time;
   el("connection").textContent="Connected · "+s.ip+" · refresh 3s";
   el("net").textContent=(s.wifi?"OK":"OFF")+" / "+(s.ntp?"OK":"WAIT / STALE");
+  el("ntpTarget").textContent=s.ntpTarget==="--"?"Idle":s.ntpTarget;
+  el("ntpSource").textContent=s.ntpSource==="--"?"--":
+    s.ntpSource+" ("+s.ntpServer+")";
+  if(s.ntpEvent!==lastNtpEvent){
+    el("message").textContent=s.ntpMsg;
+    lastNtpEvent=s.ntpEvent;
+  }
   ["mode","tx","next","lastNtp"].forEach(k=>el(k).textContent=s[k]);
   el("age").textContent=s.age<0?"--":s.age+" seconds";
   el("manual").textContent=!s.manual?"Inactive":
@@ -646,8 +755,8 @@ void drawScreen() {
                      (millis()/1000U)%2U==0;
   drawRadioIcon(114,0,txBlink);
 
-  oled.setCursor(0,10);
-  oled.println(s.synced?myTime(utc,false):String("Waiting NTP SIRIM"));
+  oled.setCursor(0,8);
+  oled.println(s.synced?myTime(utc,false):String("Waiting NTP"));
   oled.printf("WiFi:%s NTP:%s\n",
               WiFi.status()==WL_CONNECTED?"OK":"--",
               trusted(s,mono)?"OK":"--");
@@ -678,7 +787,9 @@ void drawScreen() {
   } else {
     oled.println(s.autoEnabled?"Auto: waiting NTP":"Auto: OFF");
   }
-
+  oled.setCursor(0,56);
+  if(ntpAttempt)oled.printf("NTP try:%s",ntpSourceName(ntpAttempt));
+  else oled.printf("NTP src:%s",ntpSourceName(s.ntpSource));
   oled.display();
 }
 void setup() {
@@ -707,7 +818,6 @@ void setup() {
   WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
   sntp_set_time_sync_notification_cb(onNtp);
-  configTime(0,0,NTP_SERVER_1,NTP_SERVER_2);
   sntp_set_sync_interval(NTP_INTERVAL_MS);
   setupWeb();
   if(hardwareOk){
@@ -725,10 +835,11 @@ void setup() {
     digitalWrite(TX_PIN,LOW);
   }
   Serial.println(
-    "MB6 TimeSync v0.4.1: open http://IP-on-OLED on your home WiFi.");
+    "MB6 TimeSync v0.4.3: open http://IP-on-OLED on your home WiFi.");
   serialCommand('?');
 }
 void loop() {
+  serviceNtp();
   while(Serial.available())
     serialCommand(static_cast<char>(Serial.read()));
   server.handleClient();
