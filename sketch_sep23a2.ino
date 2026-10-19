@@ -36,8 +36,8 @@ constexpr int AUTO_TX_MINUTES=8;
 constexpr int MANUAL_TX_MINUTES=10;
 constexpr int64_t MAX_NTP_AGE_US=2LL*3600*1000000;
 constexpr uint32_t NTP_INTERVAL_MS=3600000;
-constexpr char NTP_SERVER_1[]="time.cloudflare.com";
-constexpr char NTP_SERVER_2[]="my.pool.ntp.org";
+constexpr char NTP_SERVER_1[]="ntp1.sirim.my";
+constexpr char NTP_SERVER_2[]="time.cloudflare.com";
 constexpr int64_t NTP_ATTEMPT_US=30LL*1000000;
 constexpr int64_t NTP_RETRY_US=120LL*1000000;
 // Jadual Auto ikut waktu Malaysia UTC+8; kandungan JJY ikut JST UTC+9.
@@ -189,7 +189,7 @@ struct SharedState {
   int64_t lastSyncMono=0, lastSyncUtc=0, manualStart=0, manualUntil=0;
   uint32_t generation=0, appliedGeneration=0;
   uint32_t ntpSyncCount=0;
-  uint8_t ntpSource=0; // 0=none, 1=Cloudflare, 2=MY Pool; last successful reply.
+  uint8_t ntpSource=0; // 0=none, 1=SIRIM, 2=Cloudflare; last successful reply.
   jjy::Output tx;
 };
 
@@ -228,7 +228,7 @@ bool ntpWiFiWasConnected=false;
 String ntpMessage="NTP: waiting for WiFi.";
 
 const char *ntpSourceName(uint8_t source) {
-  return source==1?"Cloudflare":source==2?"MY Pool":"--";
+  return source==1?"SIRIM":source==2?"Cloudflare":"--";
 }
 const char *ntpServerName(uint8_t source) {
   return source==1?NTP_SERVER_1:source==2?NTP_SERVER_2:"--";
@@ -249,11 +249,11 @@ void startNtpAttempt(uint8_t source) {
   stopNtpClient();
   ntpAttempt=source;
   ntpAttemptStarted=esp_timer_get_time();
-  setNtpMessage(String(source==2?"Cloudflare timeout; NTP connecting: ":
+  setNtpMessage(String(source==2?"SIRIM timeout; NTP connecting: ":
                                 "NTP connecting: ")+
                 ntpSourceName(source)+" ("+ntpServerName(source)+").");
   // One configured server per attempt makes the responding source unambiguous.
-  // Cloudflare is tried first; MY Pool is the backup after 30 seconds.
+  // SIRIM is tried first; Cloudflare is the backup after 30 seconds.
   configTime(0,0,ntpServerName(source),nullptr,nullptr);
 }
 
@@ -363,7 +363,7 @@ void serviceNtp() {
     if(previous==1)startNtpAttempt(2);
     else {
       ntpNextAttempt=mono+NTP_RETRY_US;
-      setNtpMessage("NTP: Cloudflare + MY Pool timeout; retry in 120s.");
+      setNtpMessage("NTP: SIRIM + Cloudflare timeout; retry in 120s.");
     }
   } else if(!ntpAttempt && mono>=ntpNextAttempt) {
     startNtpAttempt(1);
@@ -567,7 +567,7 @@ input{width:25px;height:25px;accent-color:#58d4be}
 <path d="M9 21h6"></path>
 <path d="M8.4 7.4a5 5 0 0 1 7.2 0"></path>
 </svg></h1>
-<small>JJY 60 kHz &middot; Cloudflare / MY Pool NTP &middot; Malaysia UTC+8 &middot; v0.4.3</small>
+<small>JJY 60 kHz &middot; SIRIM / Cloudflare NTP &middot; Malaysia UTC+8 &middot; v0.4.3</small>
 <p id="connection">Connecting...</p><section>
 <div id="clock">--</div><dl>
 <dt>Wi-Fi / NTP</dt><dd id="net">--</dd>
