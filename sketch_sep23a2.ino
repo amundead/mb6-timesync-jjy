@@ -1,4 +1,4 @@
-/* MB6 TimeSync v0.4.3 - original ESP32-WROOM, Arduino ESP32 3.x.
+/* MB6 TimeSync v0.4.4 - original ESP32-WROOM, Arduino ESP32 3.x.
  * USB 5V powers ESP32/expansion board and MT3608 input.
  * GPIO25 (3.3V) junction -> 1k resistor -> 2N2222 Base.
  * Same junction -> 330 ohm resistor -> LED anode; cathode -> common GND.
@@ -8,7 +8,10 @@
  * Verify transistor pinout, coil current and Collector peak voltage.
  * OLED SH1106 1.3": VCC 3V3, GND, SDA21, SCL22.
  * WiFi stays ON. Auto windows: 8 minutes. Manual: 10 minutes.
- * Sleep changes are deferred. Fill WiFi placeholders locally before upload.
+ * Deep sleep at 04:10 MY; an active Manual session finishes first.
+ * No timed wakeup: restart with USB power cycle or EN/reset.
+ * ESP32 sleep does not cut USB power to MT3608 or the board power LED.
+ * Fill WiFi placeholders locally before upload.
  */
 #include <Arduino.h>
 #include <initializer_list>
@@ -17,6 +20,8 @@
 #include <WebServer.h>
 #include <Preferences.h>
 #include <esp_system.h>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SH110X.h>
@@ -184,6 +189,42 @@ Output Engine::tick(const Input &in) {
 }
 }
 
+// BEGIN DAILY_SHUTDOWN_POLICY -- pure logic, also exercised by host tests.
+namespace daily_shutdown {
+constexpr int64_t SECOND_US=1000000;
+constexpr int64_t DAY_SECONDS=86400;
+constexpr int64_t MY_OFFSET_SECONDS=8*3600;
+constexpr int64_t SLEEP_SECOND_OF_DAY=(4*60+10)*60; // 04:10 Malaysia
+class Policy {
+ public:
+  bool update(int64_t utc,int64_t mono,bool freshTime,bool manual) {
+    if(!armed_) {
+      if(!freshTime || utc<1704067200LL)return false;
+      const int64_t localDay=(utc+MY_OFFSET_SECONDS)/DAY_SECONDS;
+      deadlineUtc_=localDay*DAY_SECONDS+SLEEP_SECOND_OF_DAY-MY_OFFSET_SECONDS;
+      // A fresh boot at/after 04:10 stays awake until the NEXT 04:10.
+      if(deadlineUtc_<=utc)deadlineUtc_+=DAY_SECONDS;
+      deadlineMono_=mono+(deadlineUtc_-utc)*SECOND_US;
+      armed_=true;
+    } else if(!pending_ && freshTime) {
+      // Fresh NTP corrects the deadline; only the main loop owns this policy.
+      if(utc>=deadlineUtc_)pending_=true;
+      else deadlineMono_=mono+(deadlineUtc_-utc)*SECOND_US;
+    }
+    // After the first trusted sync, loss of WiFi/NTP does not cancel shutdown.
+    if(!pending_ && mono>=deadlineMono_)pending_=true;
+    return pending_ && !manual;
+  }
+  bool armed() const {return armed_;}
+  bool pending() const {return pending_;}
+  int64_t deadlineUtc() const {return deadlineUtc_;}
+ private:
+  bool armed_=false,pending_=false;
+  int64_t deadlineUtc_=0,deadlineMono_=0;
+};
+}
+// END DAILY_SHUTDOWN_POLICY
+
 struct SharedState {
   bool synced=false, autoEnabled=false, inhibit=false, outputFault=false;
   int64_t lastSyncMono=0, lastSyncUtc=0, manualStart=0, manualUntil=0;
@@ -226,6 +267,9 @@ uint32_t ntpSyncSeen=0,ntpEvent=0;
 int64_t ntpAttemptStarted=0,ntpNextAttempt=0;
 bool ntpWiFiWasConnected=false;
 String ntpMessage="NTP: waiting for WiFi.";
+daily_shutdown::Policy shutdownPolicy;
+bool shutdownFault=false;
+
 
 const char *ntpSourceName(uint8_t source) {
   return source==1?"Cloudflare":source==2?"MY Pool":"--";
@@ -431,6 +475,90 @@ String txState(const SharedState &s,int64_t mono,int64_t utc) {
   }
   return s.autoEnabled?"WAIT SCHEDULE":"STOPPED";
 }
+String shutdownStatus() {
+  if(shutdownFault)return "ERROR: shutdown failed; TX disabled";
+  if(!shutdownPolicy.armed())return "04:10 MY; waiting first NTP";
+  if(shutdownPolicy.pending())return "04:10 passed; waiting Manual TX to finish";
+  return myTime(shutdownPolicy.deadlineUtc(),true);
+}
+void shutdownFailed(const char *reason) {
+  shutdownFault=true;
+  hardwareOk=false;
+  portENTER_CRITICAL(&stateMux);
+  shared.outputFault=true;
+  portEXIT_CRITICAL(&stateMux);
+  Serial.print("Shutdown error: ");
+  Serial.println(reason);
+}
+void enterScheduledSleep() {
+  // Freeze NTP generation changes before requesting the timer's mute handshake.
+  stopNtpClient();
+  // Mute through the same generation handshake used for Preferences writes.
+  // Wait for the timer callback to observe inhibit BEFORE touching LEDC/GPIO.
+  portENTER_CRITICAL(&stateMux);
+  shared.inhibit=true;
+  ++shared.generation;
+  const uint32_t target=shared.generation;
+  portEXIT_CRITICAL(&stateMux);
+  bool muted=envelopeTimer==nullptr;
+  const uint32_t began=millis();
+  while(!muted && millis()-began<200) {
+    const SharedState s=snapshot();
+    muted=s.appliedGeneration==target && !s.tx.gate;
+    if(!muted)delay(1);
+  }
+  if(!muted) {
+    shutdownFailed("TX mute timeout");
+    return;
+  }
+  if(envelopeTimer && esp_timer_stop(envelopeTimer)!=ESP_OK) {
+    shutdownFailed("TX timer did not stop");
+    return;
+  }
+  ledcWrite(TX_PIN,0);
+  ledcDetach(TX_PIN);
+  pinMode(TX_PIN,OUTPUT);
+  digitalWrite(TX_PIN,LOW);
+  // GPIO25 is RTC-capable on the original ESP32. Latch LOW throughout sleep
+  // so the 2N2222 stays OFF while its 12V supply is still powered.
+  const gpio_num_t tx=static_cast<gpio_num_t>(TX_PIN);
+  if(rtc_gpio_init(tx)!=ESP_OK || rtc_gpio_set_level(tx,0)!=ESP_OK ||
+     rtc_gpio_set_direction(tx,RTC_GPIO_MODE_OUTPUT_ONLY)!=ESP_OK ||
+     rtc_gpio_hold_en(tx)!=ESP_OK) {
+    shutdownFailed("could not hold GPIO25 LOW");
+    return;
+  }
+  // No timer or GPIO wakeup: remain asleep until an external reset/power cycle.
+  if(esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL)!=ESP_OK) {
+    shutdownFailed("could not disable wakeup sources");
+    return;
+  }
+  if(oledOk) {
+    oled.clearDisplay();
+    oled.setTextSize(1);
+    oled.setCursor(0,0);
+    oled.println("MB6 TimeSync");
+    oled.println("04:10 shutdown");
+    oled.println("TX OFF / Sleeping");
+    oled.println("USB OFF/ON to wake");
+    oled.display();
+    delay(500);
+    oled.oled_command(SH110X_DISPLAYOFF);
+  }
+  Serial.println("04:10 MY: deep sleep. USB OFF/ON or EN/reset to restart.");
+  Serial.flush();
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  esp_deep_sleep_start();
+}
+void serviceScheduledSleep() {
+  if(shutdownFault)return;
+  const SharedState s=snapshot();
+  const int64_t mono=esp_timer_get_time();
+  if(shutdownPolicy.update(time(nullptr),mono,trusted(s,mono),manualActive(s,mono)))
+    enterScheduledSleep();
+}
+
 void persistAuto(bool enabled) {
   portENTER_CRITICAL(&stateMux);
   shared.inhibit=true;
@@ -524,6 +652,7 @@ String statusJson() {
   j+=",\"mode\":\""+String(modeName(s,mono))+"\"";
   j+=",\"tx\":\""+txState(s,mono,utc)+"\"";
   j+=",\"next\":\""+nextSlot(s,utc)+"\"";
+  j+=",\"shutdown\":\""+shutdownStatus()+"\"";
   j+=",\"lastNtp\":\""+myTime(s.lastSyncUtc,true)+"\"";
   j+=",\"age\":"+String(static_cast<long>(s.lastSyncUtc?
       (mono-s.lastSyncMono)/1000000:-1));
@@ -567,7 +696,7 @@ input{width:25px;height:25px;accent-color:#58d4be}
 <path d="M9 21h6"></path>
 <path d="M8.4 7.4a5 5 0 0 1 7.2 0"></path>
 </svg></h1>
-<small>JJY 60 kHz &middot; Cloudflare / MY Pool NTP &middot; Malaysia UTC+8 &middot; v0.4.3</small>
+<small>JJY 60 kHz &middot; Cloudflare / MY Pool NTP &middot; Malaysia UTC+8 &middot; v0.4.4</small>
 <p id="connection">Connecting...</p><section>
 <div id="clock">--</div><dl>
 <dt>Wi-Fi / NTP</dt><dd id="net">--</dd>
@@ -575,6 +704,7 @@ input{width:25px;height:25px;accent-color:#58d4be}
 <dt>Last NTP source</dt><dd id="ntpSource">--</dd>
 <dt>Mode</dt><dd id="mode">--</dd><dt>TX</dt><dd id="tx">--</dd>
 <dt>Next auto slot</dt><dd id="next">--</dd>
+<dt>Auto sleep (04:10 MY)</dt><dd id="shutdown">--</dd>
 <dt>Last NTP (MY)</dt><dd id="lastNtp">--</dd>
 <dt>NTP age</dt><dd id="age">--</dd>
 <dt>Manual</dt><dd id="manual">--</dd>
@@ -593,6 +723,9 @@ Auto OFF tidak membatalkan ujian Manual yang sedang berjalan.</p>
 <small>Manual kembali kepada pilihan Auto selepas tamat. Stop disimpan selepas
 restart. Status TX menunjukkan output kod; tiada sensor antena atau pengesahan GET jam.
 Prototaip OOK: minit :15/:45 dilangkau; leap second belum disokong.
+Deep sleep pada 04:10 MY; Manual yang aktif ditunggu hingga tamat.
+Tiada bangun automatik: OFF/ON USB atau tekan EN/reset untuk hidup semula.
+MT3608 dan LED kuasa masih menerima bekalan USB.
 Kawalan untuk rangkaian rumah sahaja.</small>
 </section></main><script>
 const token="__TOKEN__";
@@ -625,7 +758,7 @@ async function refresh(){
     el("message").textContent=s.ntpMsg;
     lastNtpEvent=s.ntpEvent;
   }
-  ["mode","tx","next","lastNtp"].forEach(k=>el(k).textContent=s[k]);
+  ["mode","tx","next","lastNtp","shutdown"].forEach(k=>el(k).textContent=s[k]);
   el("age").textContent=s.age<0?"--":s.age+" seconds";
   el("manual").textContent=!s.manual?"Inactive":
     s.wait>0?"Starts in "+s.wait+"s; duration "+s.duration+"s":
@@ -793,6 +926,10 @@ void drawScreen() {
   oled.display();
 }
 void setup() {
+  // Release any RTC hold left by a previous scheduled sleep / external reset.
+  const gpio_num_t tx=static_cast<gpio_num_t>(TX_PIN);
+  rtc_gpio_hold_dis(tx);
+  rtc_gpio_deinit(tx);
   pinMode(TX_PIN,OUTPUT);
   digitalWrite(TX_PIN,LOW);
   pinMode(26,INPUT);
@@ -835,7 +972,7 @@ void setup() {
     digitalWrite(TX_PIN,LOW);
   }
   Serial.println(
-    "MB6 TimeSync v0.4.3: open http://IP-on-OLED on your home WiFi.");
+    "MB6 TimeSync v0.4.4: open http://IP-on-OLED on your home WiFi.");
   serialCommand('?');
 }
 void loop() {
@@ -843,6 +980,7 @@ void loop() {
   while(Serial.available())
     serialCommand(static_cast<char>(Serial.read()));
   server.handleClient();
+  serviceScheduledSleep();
   const uint32_t now=millis();
   if(WiFi.status()!=WL_CONNECTED && now-lastReconnect>=30000){
     lastReconnect=now;
