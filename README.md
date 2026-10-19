@@ -23,20 +23,20 @@ Konfigurasi perkakasan terkini yang dilaporkan menggunakan **USB 5 V → MT3608 
 | Perkara | Status |
 | --- | --- |
 | Fail firmware | [`sketch_sep23a2.ino`](./sketch_sep23a2.ino), **v0.4.4** dengan deep sleep berjadual 04:10 MY |
-| NTP utama | **Cloudflare:** `time.cloudflare.com` |
-| NTP backup | **MY Pool:** `my.pool.ntp.org` |
-| Fallback | Jika Cloudflare tiada respons selepas **30 saat**, cuba MY Pool selama 30 saat. Jika kedua-duanya gagal, tunggu **120 saat** sebelum mencuba semula dari Cloudflare. |
+| NTP utama | **SIRIM:** `ntp1.sirim.my` |
+| NTP backup | **Cloudflare:** `time.cloudflare.com` |
+| Fallback | Jika SIRIM tiada respons selepas **30 saat**, cuba Cloudflare selama 30 saat. Jika kedua-duanya gagal, tunggu **120 saat** sebelum mencuba semula dari SIRIM. |
 | Paparan NTP | Msg/Web UI, OLED dan Serial menunjukkan pelayan yang sedang dicuba serta sumber sync terakhir |
 | Tempoh dan jadual | Auto **8 minit**, Manual **10 minit**; 23:59, 01:59 dan 03:59 waktu Malaysia |
 | Wi-Fi / sleep | Wi-Fi aktif ketika berjaga. **Deep sleep pada 04:10 MY**; sesi Manual aktif diselesaikan dahulu. Hidup semula melalui OFF/ON USB atau EN/reset; tiada wakeup automatik. |
 | Pengesahan | Kandungan fail dan tetapan disemak; versi dalam commit ini belum di-compile atau dimuat naik ke board dalam sesi kemas kini ini. |
 
-Firmware repo kini menggunakan Cloudflare/MY Pool, menggantikan konfigurasi SIRIM lama. Ia menggunakan **NTP/SNTP biasa, bukan NTS**. SSID dan kata laluan dalam versi GitHub ialah placeholder yang perlu diisi sebelum upload.
+Firmware repo menggunakan **SIRIM sebagai pelayan utama** dan **Cloudflare sebagai backup**. MY Pool telah dikeluarkan daripada konfigurasi. Ia menggunakan **NTP/SNTP biasa, bukan NTS**. SSID dan kata laluan dalam versi GitHub ialah placeholder yang perlu diisi sebelum upload.
 
 ## Ciri utama
 
 - Pembawa nominal **60 kHz** melalui GPIO25.
-- Masa NTP melalui Wi-Fi, dengan **Cloudflare utama / MY Pool backup** dan paparan sumber NTP.
+- Masa NTP melalui Wi-Fi, dengan **SIRIM utama / Cloudflare backup** dan paparan sumber NTP.
 - OLED I2C **1.3 inci, 128 × 64**, menggunakan pemacu SH1106 dan pustaka Adafruit SH110X.
 - Paparan masa Malaysia, status Wi-Fi/NTP, mod operasi, status TX, alamat IP dan jadual seterusnya.
 - Ikon Wi-Fi, masa/NTP dan antena pada OLED.
@@ -493,7 +493,6 @@ Perkara yang boleh dibangunkan seterusnya:
 - [Adafruit SH110X](https://github.com/adafruit/Adafruit_SH110x)
 - [Resonans LC dan kesan pengukuran — Coilcraft](https://www.coilcraft.com/en-us/resources/application-notes/measuring-self-resonant-frequency/)
 - [Cloudflare Time Services: NTP](https://developers.cloudflare.com/time-services/ntp/)
-- [NTP Pool Malaysia](https://www.ntppool.org/zone/my)
 - [P2N2222A datasheet — contoh pinout mengikut nombor komponen](https://www.onsemi.com/pdf/datasheet/p2n2222a-d.pdf)
 - [Pemacuan beban induktif — Texas Instruments](https://www.ti.com/video/6018730150001)
 - [JJY Signal Simulator — inspirasi projek](https://olafkrawczyk.com/journal/jjy-signal-simulator/)
