@@ -1,4 +1,4 @@
-/* MB6 TimeSync v0.4.4 - original ESP32-WROOM, Arduino ESP32 3.x.
+/* MB6 TimeSync v0.4.5 - original ESP32-WROOM, Arduino ESP32 3.x.
  * USB 5V powers ESP32/expansion board and MT3608 input.
  * GPIO25 (3.3V) junction -> 1k resistor -> 2N2222 Base.
  * Same junction -> 330 ohm resistor -> LED anode; cathode -> common GND.
@@ -8,6 +8,8 @@
  * Verify transistor pinout, coil current and Collector peak voltage.
  * OLED SH1106 1.3": VCC 3V3, GND, SDA21, SCL22.
  * WiFi stays ON. Auto windows: 8 minutes. Manual: 10 minutes.
+ * Select each Auto slot in Web UI; no selected slots forces Auto OFF.
+ * Auto and slot selection are saved together in Preferences.
  * Deep sleep at 04:10 MY; an active Manual session finishes first.
  * No timed wakeup: restart with USB power cycle or EN/reset.
  * ESP32 sleep does not cut USB power to MT3608 or the board power LED.
@@ -59,8 +61,8 @@ Civil civil(int64_t utcSeconds, int offsetHours);
 Frame encode(const Civil &jst);
 int pulseUs(uint8_t symbol);
 bool specialMinute(int minute);
-bool scheduled(int malaysiaMinute);
-int minutesUntilNext(int malaysiaMinute);
+bool scheduled(int malaysiaMinute,uint8_t slotMask);
+int minutesUntilNext(int malaysiaMinute,uint8_t slotMask);
 
 struct Input {
   int64_t utcUs, monoUs;
@@ -91,6 +93,23 @@ namespace jjy {
 
 // Waktu mula Auto dalam minit, mengikut jam Malaysia.
 constexpr int AUTO_START_MINUTES[]={1439,119,239}; // 23:59, 01:59, 03:59
+constexpr uint8_t AUTO_SLOT_COUNT=sizeof(AUTO_START_MINUTES)/sizeof(AUTO_START_MINUTES[0]);
+constexpr uint8_t ALL_SLOTS=(1U<<AUTO_SLOT_COUNT)-1;
+
+// BEGIN SCHEDULE_SETTINGS -- one NVS byte keeps Auto and slots consistent.
+uint8_t selectedSlots(uint8_t mask) {return mask & ALL_SLOTS;}
+bool autoAllowed(bool enabled,uint8_t mask) {return enabled && selectedSlots(mask)!=0;}
+uint8_t packSettings(bool enabled,uint8_t mask) {
+  return static_cast<uint8_t>((selectedSlots(mask)<<1) | (autoAllowed(enabled,mask)?1:0));
+}
+uint8_t unpackSlots(uint8_t packed) {return selectedSlots(packed>>1);}
+bool unpackAuto(uint8_t packed) {return autoAllowed((packed&1)!=0,unpackSlots(packed));}
+bool parseSlotMask(const char *value,uint8_t &mask) {
+  if(!value || value[0]<'0' || value[0]>'0'+ALL_SLOTS || value[1]!='\0')return false;
+  mask=static_cast<uint8_t>(value[0]-'0');
+  return true;
+}
+// END SCHEDULE_SETTINGS
 
 Civil civil(int64_t utcSeconds, int offsetHours) {
   time_t shifted = static_cast<time_t>(utcSeconds + offsetHours * 3600LL);
@@ -130,16 +149,18 @@ int pulseUs(uint8_t symbol) {
 bool specialMinute(int minute) {
   return minute==15 || minute==45;
 }
-bool scheduled(int m) {
-  for(int start : AUTO_START_MINUTES)
-    if ((m-start+1440)%1440<AUTO_TX_MINUTES) return true;
+bool scheduled(int m,uint8_t slotMask) {
+  for(uint8_t i=0;i<AUTO_SLOT_COUNT;++i)
+    if((slotMask & (1U<<i)) && (m-AUTO_START_MINUTES[i]+1440)%1440<AUTO_TX_MINUTES)
+      return true;
   return false;
 }
-int minutesUntilNext(int m) {
-  int best=1440;
-  for(int start : AUTO_START_MINUTES) {
-    int d=(start-m+1440)%1440;
-    if(d<best) best=d;
+int minutesUntilNext(int m,uint8_t slotMask) {
+  int best=-1;
+  for(uint8_t i=0;i<AUTO_SLOT_COUNT;++i) {
+    if(!(slotMask & (1U<<i)))continue;
+    int d=(AUTO_START_MINUTES[i]-m+1440)%1440;
+    if(best<0 || d<best) best=d;
   }
   return best;
 }
@@ -227,6 +248,7 @@ class Policy {
 
 struct SharedState {
   bool synced=false, autoEnabled=false, inhibit=false, outputFault=false;
+  uint8_t slotMask=jjy::ALL_SLOTS;
   int64_t lastSyncMono=0, lastSyncUtc=0, manualStart=0, manualUntil=0;
   uint32_t generation=0, appliedGeneration=0;
   uint32_t ntpSyncCount=0;
@@ -240,7 +262,7 @@ inline bool manualActive(const SharedState &s,int64_t mono) {
 inline bool txRequested(const SharedState &s,int64_t mono,int localMinute) {
   if(s.inhibit) return false;
   if(manualActive(s,mono)) return mono>=s.manualStart;
-  return s.autoEnabled && jjy::scheduled(localMinute);
+  return jjy::autoAllowed(s.autoEnabled,s.slotMask) && jjy::scheduled(localMinute,s.slotMask);
 }
 inline const char *modeName(const SharedState &s,int64_t mono) {
   return manualActive(s,mono)?"MANUAL":s.autoEnabled?"AUTO":"STOPPED";
@@ -454,11 +476,13 @@ String myTime(int64_t utc,bool date) {
   return String(b);
 }
 String nextSlot(const SharedState &s,int64_t utc) {
+  if(!jjy::selectedSlots(s.slotMask)) return "No slots selected";
   if(!s.autoEnabled) return "Auto OFF";
   if(!s.synced) return "Waiting NTP";
   const int m=static_cast<int>((utc/60+480)%1440);
-  if(jjy::scheduled(m)) return "Window active";
-  int d=jjy::minutesUntilNext(m);
+  if(jjy::scheduled(m,s.slotMask)) return "Window active";
+  int d=jjy::minutesUntilNext(m,s.slotMask);
+  if(d<0)return "No slots selected";
   return myTime((utc/60+d)*60,true);
 }
 String txState(const SharedState &s,int64_t mono,int64_t utc) {
@@ -559,7 +583,7 @@ void serviceScheduledSleep() {
     enterScheduledSleep();
 }
 
-void persistAuto(bool enabled) {
+void persistSettings(bool enabled,uint8_t slotMask) {
   portENTER_CRITICAL(&stateMux);
   shared.inhibit=true;
   ++shared.generation;
@@ -572,11 +596,27 @@ void persistAuto(bool enabled) {
     muted=s.appliedGeneration==target && !s.tx.gate;
     if(!muted) delay(1);
   }
-  saveOk=muted && prefsOk && prefs.putBool("auto",enabled)==1;
+  saveOk=muted && prefsOk && prefs.putUChar("schedule",jjy::packSettings(enabled,slotMask))==1;
   portENTER_CRITICAL(&stateMux);
   shared.inhibit=false;
   ++shared.generation;
   portEXIT_CRITICAL(&stateMux);
+}
+String setSchedule(uint8_t slotMask) {
+  const SharedState s=snapshot();
+  slotMask=jjy::selectedSlots(slotMask);
+  const bool enabled=jjy::autoAllowed(s.autoEnabled,slotMask);
+  if(s.slotMask!=slotMask || s.autoEnabled!=enabled || !saveOk) {
+    portENTER_CRITICAL(&stateMux);
+    shared.slotMask=slotMask;
+    shared.autoEnabled=enabled;
+    ++shared.generation;
+    portEXIT_CRITICAL(&stateMux);
+    persistSettings(enabled,slotMask);
+  }
+  if(!saveOk)return "Setting applied, but SAVE FAILED. Check status before restart.";
+  return slotMask?"Selected times saved. Only checked slots can run when Auto is ON.":
+                  "No times selected. Auto OFF saved; Auto checkbox disabled.";
 }
 String action(const String &name) {
   SharedState s=snapshot();
@@ -600,12 +640,14 @@ String action(const String &name) {
   }
   if(name=="auto_on" || name=="auto_off" || name=="stop") {
     const bool enabled=name=="auto_on";
+    if(enabled && !jjy::selectedSlots(s.slotMask))
+      return "ERROR: select at least one sync time before enabling Auto.";
     portENTER_CRITICAL(&stateMux);
     shared.autoEnabled=enabled;
     if(name=="stop") shared.manualStart=shared.manualUntil=0;
     ++shared.generation;
     portEXIT_CRITICAL(&stateMux);
-    if(s.autoEnabled!=enabled || !saveOk) persistAuto(enabled);
+    if(s.autoEnabled!=enabled || !saveOk) persistSettings(enabled,s.slotMask);
     if(!saveOk)
       return "Setting applied, but SAVE FAILED. Check status before restart.";
     if(name=="stop") return "TX stopped; Auto OFF saved.";
@@ -646,6 +688,7 @@ String statusJson() {
   j+=",\"ntpEvent\":"+String(ntpEvent);
   j+=",\"hardware\":"+String(hardwareOk && !s.outputFault?"true":"false");
   j+=",\"auto\":"+String(s.autoEnabled?"true":"false");
+  j+=",\"slotMask\":"+String(s.slotMask);
   j+=",\"manual\":"+String(manual?"true":"false");
   j+=",\"saved\":"+String(saveOk?"true":"false");
   j+=",\"ip\":\""+WiFi.localIP().toString()+"\"";
@@ -686,6 +729,7 @@ color:#102029;font-weight:700;cursor:pointer}
 button:disabled,input:disabled{opacity:.45;cursor:wait}
 .buttons{display:flex;gap:10px;flex-wrap:wrap}.stop{background:#ffa59e}
 label{display:flex;align-items:center;gap:12px;font-weight:bold}
+.slots{display:grid;gap:14px;margin:16px 0}
 input{width:25px;height:25px;accent-color:#58d4be}
 #connection{color:#ffd479}#message{min-height:40px;overflow-wrap:anywhere}
 </style><main><h1 class="brand">
@@ -696,7 +740,7 @@ input{width:25px;height:25px;accent-color:#58d4be}
 <path d="M9 21h6"></path>
 <path d="M8.4 7.4a5 5 0 0 1 7.2 0"></path>
 </svg></h1>
-<small>JJY 60 kHz &middot; SIRIM / Cloudflare NTP &middot; Malaysia UTC+8 &middot; v0.4.4</small>
+<small>JJY 60 kHz &middot; SIRIM / Cloudflare NTP &middot; Malaysia UTC+8 &middot; v0.4.5</small>
 <p id="connection">Connecting...</p><section>
 <div id="clock">--</div><dl>
 <dt>Wi-Fi / NTP</dt><dd id="net">--</dd>
@@ -719,7 +763,15 @@ Auto OFF tidak membatalkan ujian Manual yang sedang berjalan.</p>
 <button id="ntp" disabled>Sync NTP</button></div>
 <p id="message" role="status"></p></section>
 <section><h2>Jadual Malaysia (24 jam)</h2>
-<p>23:59–00:07 &middot; 01:59–02:07 &middot; 03:59–04:07</p>
+<div class="slots">
+<label><input id="slot0" type="checkbox" disabled>23:59–00:07 (hari berikutnya)</label>
+<label><input id="slot1" type="checkbox" disabled>01:59–02:07</label>
+<label><input id="slot2" type="checkbox" disabled>03:59–04:07</label>
+</div>
+<p class="muted" id="scheduleHint">Memuatkan pilihan waktu...</p>
+<p class="muted">Pilihan waktu disimpan automatik. Hanya waktu bertanda berjalan
+apabila Auto ON. Jika semua kosong, Auto OFF dan checkbox Auto dinyahaktifkan.
+Tandakan semula waktu, kemudian aktifkan Auto jika diperlukan.</p>
 <small>Manual kembali kepada pilihan Auto selepas tamat. Stop disimpan selepas
 restart. Status TX menunjukkan output kod; tiada sensor antena atau pengesahan GET jam.
 Prototaip OOK: minit :15/:45 dilangkau; leap second belum disokong.
@@ -731,8 +783,11 @@ Kawalan untuk rangkaian rumah sahaja.</small>
 const token="__TOKEN__";
 const el=id=>document.getElementById(id);
 let busy=false,refreshing=false;
+let controlRevision=0;
 let lastNtpEvent=null;
-function disableAll(){["auto","start","stop","ntp"].forEach(id=>el(id).disabled=true)}
+const slotIds=["slot0","slot1","slot2"];
+function selectedMask(){return slotIds.reduce((mask,id,i)=>mask|(el(id).checked?1<<i:0),0)}
+function disableAll(){["auto","start","stop","ntp",...slotIds].forEach(id=>el(id).disabled=true)}
 async function request(path,options={}){
  const controller=new AbortController();
  const timer=setTimeout(()=>controller.abort(),5000);
@@ -745,9 +800,11 @@ async function request(path,options={}){
 async function refresh(){
  if(refreshing||busy)return;
  refreshing=true;
+ const revision=controlRevision;
  try{
   const r=await request("/api/status");
   const s=await r.json();
+  if(busy||revision!==controlRevision)return; // Ignore polls started before an edit.
   el("clock").textContent=s.time;
   el("connection").textContent="Connected · "+s.ip+" · refresh 3s";
   el("net").textContent=(s.wifi?"OK":"OFF")+" / "+(s.ntp?"OK":"WAIT / STALE");
@@ -766,22 +823,29 @@ async function refresh(){
   el("frames").textContent=s.started+" / "+s.aborted;
   el("saved").textContent=s.saved?"OK":"SAVE ERROR";
   el("auto").checked=s.auto;
+  slotIds.forEach((id,i)=>el(id).checked=(s.slotMask&(1<<i))!==0);
+  el("scheduleHint").textContent=s.slotMask===0?
+    "Tiada waktu dipilih · Auto OFF. Manual masih boleh digunakan.":
+    "Waktu bertanda sahaja akan berjalan apabila Auto ON.";
   if(!busy){
-   el("auto").disabled=false;
+   el("auto").disabled=s.slotMask===0;
+   slotIds.forEach(id=>el(id).disabled=false);
    el("stop").disabled=false;
    el("start").disabled=!s.ntp||!s.hardware||s.manual;
    el("ntp").disabled=!s.wifi;
   }
  }catch(e){
+  if(busy||revision!==controlRevision)return;
   el("connection").textContent="Offline / request failed. Check Wi-Fi or IP.";
   disableAll();
  }finally{
   refreshing=false;
  }
 }
-async function control(cmd){
+async function control(cmd,extra={}){
  if(busy)return;
  busy=true;
+ ++controlRevision;
  disableAll();
  el("message").textContent="Sending...";
  try{
@@ -791,7 +855,7 @@ async function control(cmd){
     "Content-Type":"application/x-www-form-urlencoded",
     "X-MB6-Token":token
    },
-   body:"cmd="+encodeURIComponent(cmd)
+   body:new URLSearchParams({cmd,...extra}).toString()
   });
   el("message").textContent=await r.text();
  }catch(e){
@@ -803,6 +867,7 @@ async function control(cmd){
  }
 }
 el("auto").onchange=()=>control(el("auto").checked?"auto_on":"auto_off");
+slotIds.forEach(id=>el(id).onchange=()=>control("schedule",{mask:String(selectedMask())}));
 el("start").onclick=()=>control("manual");
 el("stop").onclick=()=>control("stop");
 el("ntp").onclick=()=>control("ntp");
@@ -853,7 +918,15 @@ void setupWeb() {
       server.send(403,"text/plain","Reload page; invalid token/host.");
       return;
     }
-    String result=action(server.arg("cmd"));
+    String result;
+    if(server.arg("cmd")=="schedule") {
+      uint8_t mask=0;
+      if(!server.hasArg("mask") || !jjy::parseSlotMask(server.arg("mask").c_str(),mask)) {
+        server.send(400,"text/plain","ERROR: invalid slot mask; expected 0 to 7.");
+        return;
+      }
+      result=setSchedule(mask);
+    } else result=action(server.arg("cmd"));
     server.send(result.startsWith("ERROR")?409:200,"text/plain",result);
   });
   server.onNotFound([](){
@@ -911,11 +984,15 @@ void drawScreen() {
                   (long)((s.manualUntil-mono+999999)/1000000));
   } else if(s.autoEnabled && s.synced) {
     int m=(utc/60+480)%1440;
-    if(jjy::scheduled(m)) {
+    if(jjy::scheduled(m,s.slotMask)) {
       oled.println("Auto window active");
     } else {
-      m=(m+jjy::minutesUntilNext(m))%1440;
-      oled.printf("Next:%02d:%02d MY\n",m/60,m%60);
+      const int next=jjy::minutesUntilNext(m,s.slotMask);
+      if(next<0)oled.println("Auto: no slots");
+      else {
+        m=(m+next)%1440;
+        oled.printf("Next:%02d:%02d MY\n",m/60,m%60);
+      }
     }
   } else {
     oled.println(s.autoEnabled?"Auto: waiting NTP":"Auto: OFF");
@@ -937,7 +1014,12 @@ void setup() {
   Serial.begin(115200);
   prefsOk=prefs.begin("mb6bypass",false);
   saveOk=prefsOk;
-  shared.autoEnabled=prefsOk?prefs.getBool("auto",false):false;
+  // Keep the existing namespace to migrate v0.4.4's saved Auto preference.
+  // Missing schedule key: select all three times and restore legacy Auto.
+  const uint8_t legacy=jjy::packSettings(prefsOk?prefs.getBool("auto",false):false,jjy::ALL_SLOTS);
+  const uint8_t settings=prefsOk?prefs.getUChar("schedule",legacy):legacy;
+  shared.slotMask=jjy::unpackSlots(settings);
+  shared.autoEnabled=jjy::unpackAuto(settings);
   hardwareOk=ledcSetClockSource(LEDC_USE_APB_CLK)
     && ledcAttachChannel(TX_PIN,CARRIER_HZ,1,0);
   if(hardwareOk) hardwareOk=ledcWrite(TX_PIN,0);
@@ -972,7 +1054,7 @@ void setup() {
     digitalWrite(TX_PIN,LOW);
   }
   Serial.println(
-    "MB6 TimeSync v0.4.4: open http://IP-on-OLED on your home WiFi.");
+    "MB6 TimeSync v0.4.5: open http://IP-on-OLED on your home WiFi.");
   serialCommand('?');
 }
 void loop() {
