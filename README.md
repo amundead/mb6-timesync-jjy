@@ -12,11 +12,30 @@ MB6 TimeSync mendapatkan masa melalui Wi-Fi dan NTP, kemudian menjana isyarat ma
 
 Nama repositori: [`amundead/mb6-timesync-jjy`](https://github.com/amundead/mb6-timesync-jjy).
 
-## Status firmware — v0.4.5, 23 Oktober 2026
+## Status firmware — v0.4.6, 2 November 2026
 
-Branch **[`0.4.5`](https://github.com/amundead/mb6-timesync-jjy/tree/0.4.5)** dibina daripada `0.4.4`. Versi ini menambah **checkbox setiap waktu sync** dalam Web UI. Hanya waktu yang ditanda dibenarkan memancar apabila Auto ON. Jika semua waktu dinyahpilih, **Auto menjadi OFF dan checkbox Auto dinyahaktifkan** sehingga sekurang-kurangnya satu waktu dipilih semula.
+Branch **[`0.4.6`](https://github.com/amundead/mb6-timesync-jjy/tree/0.4.6)** dibina daripada `0.4.5`. Versi ini menukar PWM LEDC kepada **8-bit** dengan **duty TX 127** dan **idle 0**, untuk ujian konfigurasi **TC4420 + IRFZ44N**. Pembawa nominal kekal **60 kHz** pada **GPIO25**.
 
-### Perubahan v0.4.5
+### Perubahan v0.4.6
+
+- `setup()`: `ledcAttachChannel(TX_PIN,CARRIER_HZ,8,0)` menggantikan resolusi 1-bit.
+- `onEnvelope()`: `ledcWrite(TX_PIN,out.gate?127:0)` menggantikan duty TX 1 pada resolusi lama. Semua laluan mute, Stop dan tidur mengekalkan duty 0.
+- Dalam PWM 8-bit, satu tempoh mempunyai **256 langkah**. Duty **127/256 = 49.609375%**, hampir 50%; nilai tepat 50% ialah 128. Profil v0.4.6 menggunakan nilai **127**.
+- PWM lama 1-bit dengan duty 1 sudah menghasilkan 50% dalam Arduino ESP32 3.3.12. Perubahan ini menambah resolusi dan mengubah duty sedikit; ia bukan bukti bahawa PWM lama rosak atau jarak pancaran akan meningkat.
+- Versi pada komen firmware, Web UI dan Serial ditukar kepada v0.4.6. Komen pendawaian dikemas kini kepada TC4420 + IRFZ44N dan kapasitor semasa.
+- Pilihan waktu sync, penyimpanan Preferences, tempoh Auto/Manual, NTP, OOK dan deep sleep diteruskan daripada v0.4.5.
+
+### Sejarah versi
+
+#### v0.4.4 — deep sleep berjadual dan susunan NTP
+
+- Deep sleep pada **04:10 waktu Malaysia**, selepas sesi Manual yang aktif tamat.
+- Sebelum tidur, TX dibisukan dan **GPIO25 dipegang LOW**; OLED dipadamkan dan Wi-Fi dimatikan. Bekalan USB/MT3608 tidak diputuskan secara fizikal.
+- Tiada wakeup automatik. OFF/ON USB atau EN/reset diperlukan untuk boot semula. Boot dengan NTP pertama pada/selepas 04:10 menjadualkan tidur pada 04:10 hari berikutnya.
+- Pada keadaan branch `0.4.4` yang dirujuk, **SIRIM `ntp1.sirim.my`** ialah pelayan utama dan **Cloudflare `time.cloudflare.com`** backup. Timeout 30 saat setiap pelayan; cuba semula selepas 120 saat jika kedua-duanya gagal.
+- Web UI, OLED dan Serial menunjukkan pelayan yang sedang dicuba serta sumber sync terakhir. Auto 8 minit dan Manual 10 minit diteruskan.
+
+#### v0.4.5 — pilihan waktu sync dalam Web UI
 
 - Pilihan berasingan untuk **23:59**, **01:59** dan **03:59**, semuanya waktu Malaysia.
 - Pilihan waktu dan status Auto disimpan bersama dalam Preferences dan dipulihkan selepas reboot atau OFF/ON USB.
@@ -30,20 +49,20 @@ Branch **[`0.4.5`](https://github.com/amundead/mb6-timesync-jjy/tree/0.4.5)** di
 
 **Ujian pengguna berjaya: jam menunjukkan L3 semasa penerimaan dan GET selepas selesai sync pada jarak sekitar 4 meter.** Pengguna turut melaporkan penerimaan dari bilik lain dengan pintu tertutup. Ini ialah hasil ujian pada pemasangan dan keadaan rumah tersebut; jangkauan untuk pemasangan lain belum disahkan.
 
-Konfigurasi perkakasan terkini yang dilaporkan menggunakan **USB 5 V → MT3608 sekitar 12 V → litar LC selari**, dengan **transistor 2N2222**, **gelung 0.45–0.48 mH** dan **kapasitor 15 nF (153)**. Arus gelung, voltan puncak Collector dan ketahanan jangka panjang belum direkodkan.
+Konfigurasi perkakasan terdahulu menggunakan **USB 5 V → MT3608 sekitar 12 V → litar LC selari**, dengan **transistor 2N2222**, **gelung 0.45–0.48 mH** dan **kapasitor 15 nF (153)**. Arus gelung, voltan puncak Collector dan ketahanan jangka panjang belum direkodkan.
 
 ### Firmware dalam repo
 
 | Perkara | Status |
 | --- | --- |
-| Fail firmware | [`sketch_sep23a2.ino`](./sketch_sep23a2.ino), **v0.4.5**, pilihan waktu sync dan deep sleep berjadual 04:10 MY |
+| Fail firmware | [`sketch_sep23a2.ino`](./sketch_sep23a2.ino), **v0.4.6**, pilihan waktu sync dan deep sleep berjadual 04:10 MY |
 | NTP utama | **SIRIM:** `ntp1.sirim.my` |
 | NTP backup | **Cloudflare:** `time.cloudflare.com` |
 | Fallback | Jika SIRIM tiada respons selepas **30 saat**, cuba Cloudflare selama 30 saat. Jika kedua-duanya gagal, tunggu **120 saat** sebelum mencuba semula dari SIRIM. |
 | Paparan NTP | Msg/Web UI, OLED dan Serial menunjukkan pelayan yang sedang dicuba serta sumber sync terakhir |
 | Tempoh dan jadual | Auto **8 minit**, Manual **10 minit**; pilih 23:59, 01:59 dan/atau 03:59 melalui checkbox Web UI |
 | Wi-Fi / sleep | Wi-Fi aktif ketika berjaga. **Deep sleep pada 04:10 MY**; sesi Manual aktif diselesaikan dahulu. Hidup semula melalui OFF/ON USB atau EN/reset; tiada wakeup automatik. |
-| Pengesahan | Ujian host dan compile ESP32 penuh lulus; ujian board serta penerimaan jam belum dilakukan untuk versi ini. |
+| Pengesahan | Ujian host jadual/Web UI lulus. Compile penuh v0.4.6 dan ujian board/penerimaan jam belum dilakukan dalam kemas kini ini. |
 
 Firmware repo menggunakan **SIRIM sebagai pelayan utama** dan **Cloudflare sebagai backup**. MY Pool telah dikeluarkan daripada konfigurasi. Ia menggunakan **NTP/SNTP biasa, bukan NTS**. SSID dan kata laluan dalam versi GitHub ialah placeholder yang perlu diisi sebelum upload.
 
@@ -64,7 +83,25 @@ Firmware repo menggunakan **SIRIM sebagai pelayan utama** dan **Cloudflare sebag
 
 > `NTP:OK` bermaksud ESP32 menerima masa rangkaian. `TX:FRAME` bermaksud firmware sedang menjana bingkai pancaran. Kedua-duanya bukan pengesahan bahawa jam berjaya sync; semak keputusan penerimaan pada jam sendiri.
 
-## Perkakasan
+## Perkakasan semasa — TC4420 + IRFZ44N
+
+| Bahagian | Sambungan / nilai |
+| --- | --- |
+| Input TC4420 | GPIO25 → 1 kΩ → Pin 2 INPUT; INPUT → 10 kΩ → Common GND |
+| Bekalan TC4420 | Pin 1 dan 8 → sekitar 12 V; Pin 4 dan 5 → Common GND |
+| Output TC4420 | Pin 6 dan 7 disatukan → Gate IRFZ44N; Pin 3 NC tidak disambung |
+| IRFZ44N | Source → GND; Drain → T2. Semak datasheet model sebenar; jangan keliru dengan IRLZ44N. |
+| LC selari | Gelung sekitar **0.47 mH** bersama **153 (15 nF) + 101 (100 pF) + 221 (220 pF)**, semuanya antara **T1 (+12 V)** dan **T2 (Drain)** |
+| Jumlah kapasitor LC | **15.32 nF nominal**; resonans LC ideal sekitar **59.31 kHz** sebelum kesan parasit/toleransi. Pembawa firmware kekal nominal 60 kHz. |
+| Bypass TC4420 | **333 (33 nF) + 105 (1 µF)** selari antara VDD dan GND, dekat cip; bukan sebahagian daripada kapasitor LC |
+| LED pilihan | GPIO25 → 220 Ω → Anod; Katod → Common GND |
+| OLED | SH1106, 3.3 V; SDA21 dan SCL22 |
+
+TC4420 tidak menyongsangkan input: GPIO25 LOW sepatutnya mematikan MOSFET. Pertukaran kepada pemacu ini dilaporkan menurunkan jarak daripada sekitar 7 m pada 2N2222 kepada sekitar 1.5 m; perubahan PWM v0.4.6 **belum diuji untuk membuktikan pemulihan jarak**. Firmware tiada sensor arus, suhu, medan antena atau voltan puncak Drain.
+
+## Perkakasan lama — 2N2222
+
+**Bahagian perkakasan dan langkah pemasangan di bawah ialah rekod konfigurasi 2N2222 terdahulu, sehingga tajuk “Perisian dan pemasangan”. Untuk TC4420 + IRFZ44N, gunakan jadual perkakasan semasa di atas.**
 
 | Bil | Komponen | Spesifikasi / Kod | Fungsi & Titik Sambungan pada Papan Ekspansi |
 | --- | --- | --- | --- |
@@ -314,7 +351,7 @@ Tetapkan dua terminal antena sebagai **T1 = VOUT+ MT3608 sekitar 12 V** dan **T2
 
 Gunakan Arduino IDE dengan:
 
-- Pakej **esp32 by Espressif Systems**, siri **3.x** untuk firmware **v0.4.5** dalam repo.
+- Pakej **esp32 by Espressif Systems**, siri **3.x** untuk firmware **v0.4.6** dalam repo.
 - **Adafruit GFX Library**.
 - **Adafruit SH110X**.
 - **Adafruit BusIO**, jika diminta sebagai dependency.
@@ -336,6 +373,8 @@ Gunakan Arduino IDE dengan:
    constexpr uint8_t TX_PIN = 25;
    constexpr uint8_t PIN_SDA = 21, PIN_SCL = 22;
    constexpr uint32_t CARRIER_HZ = 60000;
+   // setup(): ledcAttachChannel(TX_PIN, CARRIER_HZ, 8, 0);
+   // onEnvelope(): ledcWrite(TX_PIN, out.gate ? 127 : 0);
    constexpr int AUTO_TX_MINUTES = 8;
    constexpr int MANUAL_TX_MINUTES = 10;
    ```
@@ -357,7 +396,7 @@ Semua waktu jadual berikut ialah **waktu Malaysia, UTC+8**. Waktu tamat ialah pe
 | Auto | 03:59 | 04:07 | 8 minit |
 | Manual | Minit penuh seterusnya selepas arahan diterima | 10 minit selepas mula | 10 minit |
 
-Dalam kod v0.4.5, jadual mula dinyatakan sebagai minit selepas tengah malam:
+Dalam kod v0.4.6, jadual mula dinyatakan sebagai minit selepas tengah malam:
 
 ```cpp
 constexpr int AUTO_START_MINUTES[] = {1439, 119, 239};
@@ -384,11 +423,11 @@ Kejayaan penerimaan pada jam tidak membatalkan jadual berikutnya secara automati
 | --- | --- |
 | Masa OLED dan Web UI | Malaysia, UTC+8 |
 | Jadual Auto | Malaysia, UTC+8 |
-| Data masa dalam bingkai JJY firmware v0.4.5 | Jepun, JST / UTC+9 |
+| Data masa dalam bingkai JJY firmware v0.4.6 | Jepun, JST / UTC+9 |
 
 Tetapan Home City dan penerimaan radio bergantung pada model jam. Semak manual jam sebelum menukar bandar. Jika jam ditetapkan ke Tokyo, data JST biasa akan menghasilkan masa Tokyo, iaitu satu jam mendahului Malaysia.
 
-Pengubahsuaian khas untuk menghantar masa Malaysia kepada jam yang ditetapkan ke Tokyo perlu dibuat pada pengekodan payload. Ia **bukan tetapan lalai** firmware v0.4.5 yang dirujuk dalam README ini.
+Pengubahsuaian khas untuk menghantar masa Malaysia kepada jam yang ditetapkan ke Tokyo perlu dibuat pada pengekodan payload. Ia **bukan tetapan lalai** firmware v0.4.6 yang dirujuk dalam README ini.
 
 ## Penggunaan Web UI
 
@@ -436,7 +475,7 @@ Untuk integrasi, `GET /api/status` menambah `slotMask`: bit 0 = 23:59, bit 1 = 0
 | `Next` | Jadual mula auto seterusnya dalam waktu Malaysia |
 | `Auto sleep (04:10 MY)` / `shutdown` | Tarikh/waktu tidur seterusnya, atau status menunggu sesi Manual |
 
-Firmware v0.4.5 meminta NTP setiap satu jam dan menggunakan had usia masa dua jam. Paparan status TX datang daripada keadaan firmware, bukan sensor RF atau pengukuran antena.
+Firmware v0.4.6 meminta NTP setiap satu jam dan menggunakan had usia masa dua jam. Paparan status TX datang daripada keadaan firmware, bukan sensor RF atau pengukuran antena.
 
 ## Ujian dengan jam
 
@@ -475,7 +514,7 @@ Rekod ini berdasarkan laporan pengguna. Model jam untuk ujian terkini, orientasi
 
 ## Kuasa dan deep sleep pada 04:10 pagi
 
-Firmware **v0.4.5** mengekalkan Wi-Fi aktif semasa berjaga dengan `WiFi.setSleep(false)`. ESP32 masuk **deep sleep pada 04:10 waktu Malaysia**, termasuk apabila semua waktu sync dinyahpilih. Sesi **03:59–04:07** hanya berjalan jika waktunya ditanda dan Auto ON.
+Firmware **v0.4.6** mengekalkan Wi-Fi aktif semasa berjaga dengan `WiFi.setSleep(false)`. ESP32 masuk **deep sleep pada 04:10 waktu Malaysia**, termasuk apabila semua waktu sync dinyahpilih. Sesi **03:59–04:07** hanya berjalan jika waktunya ditanda dan Auto ON.
 
 | Keadaan | Tindakan |
 | --- | --- |
@@ -496,7 +535,7 @@ Waktu sasaran ditetapkan selepas NTP pertama yang sah. Contohnya, hidupkan peran
 
 Sebelum tidur, firmware menunggu callback TX mengesahkan output telah dimatikan sebelum menghentikan timer dan memindahkan GPIO25 kepada RTC hold. Jika persediaan tidur gagal, firmware kekal berjaga dengan TX disekat dan memaparkan ralat; ia tidak meneruskan tidur dengan konfigurasi output yang belum disahkan.
 
-## Pengujian v0.4.5
+## Pengujian v0.4.6
 
 Jalankan ujian host dengan Python 3, `g++` dan Node.js:
 
@@ -506,9 +545,9 @@ python3 tests/check_schedule.py
 
 Ujian menjalankan fungsi sebenar daripada firmware dan JavaScript sebenar daripada Web UI. Liputan merangkumi **8 kombinasi pilihan × 1,440 minit**, tetingkap 23:59 melintasi tengah malam, jadual seterusnya, pengecualian Manual, pemulihan selepas reboot, migrasi Auto lama, semua waktu kosong, memilih semula waktu, Stop, input API tidak sah, kegagalan menyimpan, timeout pembisuan TX, status polling semasa perubahan dan pemulihan sambungan Web UI.
 
-**Compile penuh lulus** menggunakan Arduino CLI, board `esp32:esp32:esp32` (ESP32 Dev Module), core **esp32 3.3.12**, Adafruit SH110X **2.1.15**, Adafruit GFX **1.13.0** dan Adafruit BusIO **1.17.4**, dengan `--warnings all`. Saiz sketch **1,018,621 bait (77%)**; pemboleh ubah global **49,836 bait (15%)** untuk konfigurasi build tersebut.
+**Rekod compile v0.4.5 (bukan keputusan compile v0.4.6): compile penuh lulus** menggunakan Arduino CLI, board `esp32:esp32:esp32` (ESP32 Dev Module), core **esp32 3.3.12**, Adafruit SH110X **2.1.15**, Adafruit GFX **1.13.0** dan Adafruit BusIO **1.17.4**, dengan `--warnings all`. Saiz sketch **1,018,621 bait (77%)**; pemboleh ubah global **49,836 bait (15%)** untuk konfigurasi build tersebut.
 
-Ujian pada board ESP32 dan penerimaan jam belum dilakukan untuk versi ini.
+Compile penuh v0.4.6 belum dijalankan dalam kemas kini ini. Ujian pada board ESP32, ukuran frekuensi/duty sebenar dan penerimaan jam juga belum dilakukan untuk versi ini.
 
 ## Skop dan pembangunan seterusnya
 
@@ -531,6 +570,9 @@ Perkara yang boleh dibangunkan seterusnya:
 - [GPIO dan RTC hold — Espressif](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/peripherals/gpio.html)
 
 - [ESP32 datasheet — Espressif](https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf)
+- [Arduino ESP32 LEDC API](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/ledc.html)
+- [TC4420/TC4429 datasheet — Microchip](https://ww1.microchip.com/downloads/en/DeviceDoc/21419D.pdf)
+- [IRFZ44N datasheet — Infineon](https://www.infineon.com/assets/row/public/documents/24/49/infineon-irfz44n-datasheet-en.pdf)
 - [Arduino ESP32: perubahan API 2.x ke 3.x](https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x_to_3.0.html)
 - [Adafruit SH110X](https://github.com/adafruit/Adafruit_SH110x)
 - [Resonans LC dan kesan pengukuran — Coilcraft](https://www.coilcraft.com/en-us/resources/application-notes/measuring-self-resonant-frequency/)
@@ -551,3 +593,4 @@ Lesen repositori belum ditetapkan. Tambahkan fail `LICENSE` apabila pemilik proj
 | Logo / banner projek | `mb6-timesync-banner.png` di root repo, bersebelahan README |
 
 Letakkan kedua-duanya dengan struktur tersebut supaya laluan `./mb6-timesync-banner.png` dalam README terus merujuk kepada banner yang betul. Banner ini ialah identiti grafik projek DIY MB6 TimeSync; nama G-SHOCK dan MULTI BAND 6 merujuk kepada keluarga jam sasaran.
+

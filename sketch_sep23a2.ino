@@ -1,11 +1,14 @@
-/* MB6 TimeSync v0.4.5 - original ESP32-WROOM, Arduino ESP32 3.x.
+/* MB6 TimeSync v0.4.6 - original ESP32-WROOM, Arduino ESP32 3.x.
  * USB 5V powers ESP32/expansion board and MT3608 input.
- * GPIO25 (3.3V) junction -> 1k resistor -> 2N2222 Base.
- * Same junction -> 330 ohm resistor -> LED anode; cathode -> common GND.
- * 2N2222 Emitter -> common GND; Collector -> LC node T2.
- * MT3608 VOUT+ (~12V) -> LC node T1. Coil and 15nF capacitor in parallel
- * between T1 and T2. Collector is NOT wired directly to GND.
- * Verify transistor pinout, coil current and Collector peak voltage.
+ * GPIO25 (3.3V) -> 1k resistor -> TC4420 INPUT; INPUT -> 10k -> GND.
+ * Same GPIO25 junction -> 220 ohm resistor -> LED anode; cathode -> GND.
+ * TC4420 VDD -> 12V, GND -> common GND, both OUTPUT pins -> IRFZ44N Gate.
+ * IRFZ44N Source -> common GND; Drain -> LC node T2.
+ * MT3608 VOUT+ (~12V) -> LC node T1. Coil (~0.47mH) and capacitors
+ * 153 (15nF), 101 (100pF), 221 (220pF) in parallel between T1 and T2.
+ * TC4420 bypass: 333 (33nF) + 105 (1uF), in parallel across VDD/GND.
+ * 8-bit LEDC: TX duty 127/256 (~49.61%); idle duty 0. Carrier nominal 60kHz.
+ * Verify pinout, coil current and Drain peak voltage on actual hardware.
  * OLED SH1106 1.3": VCC 3V3, GND, SDA21, SCL22.
  * WiFi stays ON. Auto windows: 8 minutes. Manual: 10 minutes.
  * Select each Auto slot in Web UI; no selected slots forces Auto OFF.
@@ -447,7 +450,7 @@ void onEnvelope(void *) {
     !s.outputFault && txRequested(s,mono,m),s.generation});
   bool fault=false;
   if(out.gate!=gateWasOn) {
-    if(ledcWrite(TX_PIN,out.gate?1:0)) gateWasOn=out.gate;
+    if(ledcWrite(TX_PIN,out.gate?127:0)) gateWasOn=out.gate;
     else {
       ledcWrite(TX_PIN,0);
       gateWasOn=false;
@@ -544,7 +547,7 @@ void enterScheduledSleep() {
   pinMode(TX_PIN,OUTPUT);
   digitalWrite(TX_PIN,LOW);
   // GPIO25 is RTC-capable on the original ESP32. Latch LOW throughout sleep
-  // so the 2N2222 stays OFF while its 12V supply is still powered.
+  // so TC4420 INPUT stays LOW and the MOSFET stays OFF with 12V still powered.
   const gpio_num_t tx=static_cast<gpio_num_t>(TX_PIN);
   if(rtc_gpio_init(tx)!=ESP_OK || rtc_gpio_set_level(tx,0)!=ESP_OK ||
      rtc_gpio_set_direction(tx,RTC_GPIO_MODE_OUTPUT_ONLY)!=ESP_OK ||
@@ -740,7 +743,7 @@ input{width:25px;height:25px;accent-color:#58d4be}
 <path d="M9 21h6"></path>
 <path d="M8.4 7.4a5 5 0 0 1 7.2 0"></path>
 </svg></h1>
-<small>JJY 60 kHz &middot; SIRIM / Cloudflare NTP &middot; Malaysia UTC+8 &middot; v0.4.5</small>
+<small>JJY 60 kHz &middot; SIRIM / Cloudflare NTP &middot; Malaysia UTC+8 &middot; v0.4.6</small>
 <p id="connection">Connecting...</p><section>
 <div id="clock">--</div><dl>
 <dt>Wi-Fi / NTP</dt><dd id="net">--</dd>
@@ -1021,7 +1024,7 @@ void setup() {
   shared.slotMask=jjy::unpackSlots(settings);
   shared.autoEnabled=jjy::unpackAuto(settings);
   hardwareOk=ledcSetClockSource(LEDC_USE_APB_CLK)
-    && ledcAttachChannel(TX_PIN,CARRIER_HZ,1,0);
+    && ledcAttachChannel(TX_PIN,CARRIER_HZ,8,0);
   if(hardwareOk) hardwareOk=ledcWrite(TX_PIN,0);
   Wire.begin(PIN_SDA,PIN_SCL);
   Wire.setClock(400000);
@@ -1054,7 +1057,7 @@ void setup() {
     digitalWrite(TX_PIN,LOW);
   }
   Serial.println(
-    "MB6 TimeSync v0.4.5: open http://IP-on-OLED on your home WiFi.");
+    "MB6 TimeSync v0.4.6: open http://IP-on-OLED on your home WiFi.");
   serialCommand('?');
 }
 void loop() {
@@ -1074,3 +1077,4 @@ void loop() {
   }
   delay(2);
 }
+
