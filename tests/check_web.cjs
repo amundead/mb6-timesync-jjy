@@ -8,7 +8,7 @@ const elements=new Map([...ids].map(id=>[id,{textContent:'',disabled:true,checke
 const el=id=>{assert.ok(elements.has(id),'Unknown element '+id);return elements.get(id)};
 let data={time:'12:00:00 AM',ip:'192.168.0.180',wifi:true,ntp:true,hardware:true,
  ntpTarget:'--',ntpSource:'SIRIM',ntpServer:'ntp1.sirim.my',ntpMsg:'NTP synced: SIRIM',ntpEvent:1,
- age:0,manual:false,started:0,aborted:0,saved:true,auto:false,slotMask:7,shutdown:'04:10 MY'};
+ sleepEnabled:false,wakeEnabled:false,sleepSaved:true,wakeup:'Auto Wakeup OFF',age:0,manual:false,started:0,aborted:0,saved:true,auto:false,slotMask:7,shutdown:'04:10 MY'};
 let posts=[],offline=false,pendingStatus=null;
 const context={document:{getElementById:el},AbortController,setTimeout,clearTimeout,
  URLSearchParams,setInterval:()=>{},fetch:async(url,options)=>{
@@ -24,6 +24,10 @@ const context={document:{getElementById:el},AbortController,setTimeout,clearTime
    data.slotMask=Number(args.get('mask'));if(!data.slotMask)data.auto=false;
   }else if(args.get('cmd')==='auto_on'){assert.notEqual(data.slotMask,0);data.auto=true}
   else if(args.get('cmd')==='auto_off')data.auto=false;
+  else if(args.get('cmd')==='sleep_on')data.sleepEnabled=true;
+  else if(args.get('cmd')==='sleep_off')data.sleepEnabled=false;
+  else if(args.get('cmd')==='wake_on')data.wakeEnabled=true;
+  else if(args.get('cmd')==='wake_off')data.wakeEnabled=false;
   return {ok:true,text:async()=> 'Saved'};
  }};
 vm.createContext(context);vm.runInContext(script,context);
@@ -64,8 +68,32 @@ const settle=()=>new Promise(r=>setImmediate(r));
  await latePoll;assert.equal(el('slot0').checked,true);assert.equal(el('slot2').checked,false);
  pendingStatus=null;await vm.runInContext('refresh()',context);
  offline=true;await vm.runInContext('refresh()',context);
- for(const id of ['auto','start','stop','ntp','slot0','slot1','slot2'])assert.equal(el(id).disabled,true);
+ for(const id of ['auto','autoSleep','autoWake','start','stop','ntp','slot0','slot1','slot2'])assert.equal(el(id).disabled,true);
  offline=false;await vm.runInContext('refresh()',context);assert.equal(el('slot0').disabled,false);
  data.saved=false;await vm.runInContext('refresh()',context);assert.equal(el('saved').textContent,'SAVE ERROR');
+
+ for(const id of ['autoSleep','autoWake'])assert.equal(el(id).disabled,false);
+ el('autoSleep').checked=true;await el('autoSleep').onchange();
+ assert.deepEqual(posts.at(-1),{cmd:'sleep_on'});assert.equal(el('autoSleep').checked,true);
+ el('autoWake').checked=true;await el('autoWake').onchange();
+ assert.deepEqual(posts.at(-1),{cmd:'wake_on'});assert.equal(el('autoWake').checked,true);
+ el('autoSleep').checked=false;await el('autoSleep').onchange();
+ assert.deepEqual(posts.at(-1),{cmd:'sleep_off'});assert.equal(el('autoWake').checked,true);
+ el('autoWake').checked=false;await el('autoWake').onchange();
+ assert.deepEqual(posts.at(-1),{cmd:'wake_off'});
+ // Power-on status clears wake checkbox; sleep persistence failure is visible.
+ data.sleepEnabled=true;data.wakeEnabled=false;data.sleepSaved=false;
+ await vm.runInContext('refresh()',context);
+ assert.equal(el('autoSleep').checked,true);assert.equal(el('autoWake').checked,false);
+ assert.equal(el('sleepSaved').textContent,'SAVE ERROR');
+ // Sleep controls inherit revision protection against stale polling responses.
+ pendingStatus=new Promise(r=>{resolvePoll=r});
+ const sleepPoll=vm.runInContext('refresh()',context);await settle();
+ el('autoSleep').checked=false;await el('autoSleep').onchange();
+ resolvePoll({ok:true,json:async()=>({...data,sleepEnabled:true,wakeEnabled:true})});
+ await sleepPoll;assert.equal(el('autoSleep').checked,false);assert.equal(el('autoWake').checked,false);
+ pendingStatus=null;
+ console.log('PASS: sleep/wake checkbox POST, independent controls, reset state, save warning and stale polling.');
  console.log('PASS: actual Web UI, all checkbox combinations, empty/reselect flow, authenticated POST, stale-poll race, offline recovery and save warning.');
 })().catch(e=>{console.error(e);process.exit(1)});
+

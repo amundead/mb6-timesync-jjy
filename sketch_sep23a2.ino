@@ -1,4 +1,4 @@
-/* MB6 TimeSync v0.4.6 - original ESP32-WROOM, Arduino ESP32 3.x.
+/* MB6 TimeSync v0.4.7 - original ESP32-WROOM, Arduino ESP32 3.x.
  * USB 5V powers ESP32/expansion board and MT3608 input.
  * GPIO25 (3.3V) -> 1k resistor -> TC4420 INPUT; INPUT -> 10k -> GND.
  * Same GPIO25 junction -> 220 ohm resistor -> LED anode; cathode -> GND.
@@ -13,8 +13,9 @@
  * WiFi stays ON. Auto windows: 8 minutes. Manual: 10 minutes.
  * Select each Auto slot in Web UI; no selected slots forces Auto OFF.
  * Auto and slot selection are saved together in Preferences.
- * Deep sleep at 04:10 MY; an active Manual session finishes first.
- * No timed wakeup: restart with USB power cycle or EN/reset.
+ * Optional deep sleep at 04:10 MY; active Manual sessions finish first.
+ * Optional timer wake at 23:40 MY. Auto sleep is saved in NVS (default OFF).
+ * Auto wake is RTC-only; power loss / non-timer reset disables it.
  * ESP32 sleep does not cut USB power to MT3608 or the board power LED.
  * Fill WiFi placeholders locally before upload.
  */
@@ -219,9 +220,22 @@ constexpr int64_t SECOND_US=1000000;
 constexpr int64_t DAY_SECONDS=86400;
 constexpr int64_t MY_OFFSET_SECONDS=8*3600;
 constexpr int64_t SLEEP_SECOND_OF_DAY=(4*60+10)*60; // 04:10 Malaysia
+constexpr int64_t WAKE_SECOND_OF_DAY=(23*60+40)*60; // 23:40 Malaysia
+constexpr uint32_t WAKE_TOKEN=0x4D423657;
+bool restoreWake(bool deepSleep,bool timerWake,uint32_t token) {
+  return deepSleep && timerWake && token==WAKE_TOKEN;
+}
+int64_t nextWakeUtcUs(int64_t utcUs) {
+  if(utcUs<1704067200LL*SECOND_US)return 0;
+  const int64_t day=(utcUs/SECOND_US+MY_OFFSET_SECONDS)/DAY_SECONDS;
+  int64_t target=(day*DAY_SECONDS+WAKE_SECOND_OF_DAY-MY_OFFSET_SECONDS)*SECOND_US;
+  if(target<=utcUs)target+=DAY_SECONDS*SECOND_US;
+  return target;
+}
 class Policy {
  public:
-  bool update(int64_t utc,int64_t mono,bool freshTime,bool manual) {
+  bool update(int64_t utc,int64_t mono,bool freshTime,bool manual,bool enabled=true) {
+    if(!enabled) { *this=Policy(); return false; }
     if(!armed_) {
       if(!freshTime || utc<1704067200LL)return false;
       const int64_t localDay=(utc+MY_OFFSET_SECONDS)/DAY_SECONDS;
@@ -251,6 +265,7 @@ class Policy {
 
 struct SharedState {
   bool synced=false, autoEnabled=false, inhibit=false, outputFault=false;
+  bool sleepEnabled=false,wakeEnabled=false;
   uint8_t slotMask=jjy::ALL_SLOTS;
   int64_t lastSyncMono=0, lastSyncUtc=0, manualStart=0, manualUntil=0;
   uint32_t generation=0, appliedGeneration=0;
@@ -278,6 +293,8 @@ inline const char *modeName(const SharedState &s,int64_t mono) {
 #endif
 
 SharedState shared;
+// Retained across timer deep-sleep wake only; never stored in flash/NVS.
+RTC_DATA_ATTR uint32_t savedWakeToken=0;
 portMUX_TYPE stateMux=portMUX_INITIALIZER_UNLOCKED;
 jjy::Engine engine;
 esp_timer_handle_t envelopeTimer=nullptr;
@@ -294,6 +311,7 @@ bool ntpWiFiWasConnected=false;
 String ntpMessage="NTP: waiting for WiFi.";
 daily_shutdown::Policy shutdownPolicy;
 bool shutdownFault=false;
+bool sleepSaveOk=true;
 
 
 const char *ntpSourceName(uint8_t source) {
@@ -504,9 +522,17 @@ String txState(const SharedState &s,int64_t mono,int64_t utc) {
 }
 String shutdownStatus() {
   if(shutdownFault)return "ERROR: shutdown failed; TX disabled";
+  if(!snapshot().sleepEnabled)return "Auto Deep Sleep OFF";
   if(!shutdownPolicy.armed())return "04:10 MY; waiting first NTP";
   if(shutdownPolicy.pending())return "04:10 passed; waiting Manual TX to finish";
   return myTime(shutdownPolicy.deadlineUtc(),true);
+}
+String wakeupStatus() {
+  const SharedState s=snapshot();
+  if(!s.wakeEnabled)return "Auto Wakeup OFF; USB/EN to wake";
+  if(!s.sleepEnabled)return "23:40 MY enabled; Auto Deep Sleep is OFF";
+  if(!s.synced)return "23:40 MY; waiting first NTP";
+  return myTime(daily_shutdown::nextWakeUtcUs(static_cast<int64_t>(time(nullptr))*1000000)/1000000,true);
 }
 void shutdownFailed(const char *reason) {
   shutdownFault=true;
@@ -555,7 +581,7 @@ void enterScheduledSleep() {
     shutdownFailed("could not hold GPIO25 LOW");
     return;
   }
-  // No timer or GPIO wakeup: remain asleep until an external reset/power cycle.
+  // Clear all old wake sources; only the optional timer may wake this sleep.
   if(esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL)!=ESP_OK) {
     shutdownFailed("could not disable wakeup sources");
     return;
@@ -567,13 +593,27 @@ void enterScheduledSleep() {
     oled.println("MB6 TimeSync");
     oled.println("04:10 shutdown");
     oled.println("TX OFF / Sleeping");
-    oled.println("USB OFF/ON to wake");
+    oled.println(snapshot().wakeEnabled?"Wake:23:40 MY":"USB OFF/ON to wake");
     oled.display();
     delay(500);
-    oled.oled_command(SH110X_DISPLAYOFF);
   }
-  Serial.println("04:10 MY: deep sleep. USB OFF/ON or EN/reset to restart.");
+  Serial.println(snapshot().wakeEnabled?"Deep sleep; timer wake at 23:40 MY.":
+                 "Deep sleep; USB OFF/ON or EN/reset to restart.");
   Serial.flush();
+  const bool wake=snapshot().wakeEnabled;
+  savedWakeToken=wake?daily_shutdown::WAKE_TOKEN:0;
+  if(wake) {
+    struct timeval now;
+    gettimeofday(&now,nullptr);
+    const int64_t utcUs=static_cast<int64_t>(now.tv_sec)*1000000+now.tv_usec;
+    const int64_t target=daily_shutdown::nextWakeUtcUs(utcUs);
+    if(target<=utcUs || esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(target-utcUs))!=ESP_OK) {
+      shutdownFailed("could not arm 23:40 wake timer");
+      return;
+    }
+  }
+  // Leave the Web UI/OLED available if configuring the wake timer failed.
+  if(oledOk)oled.oled_command(SH110X_DISPLAYOFF);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   esp_deep_sleep_start();
@@ -582,11 +622,11 @@ void serviceScheduledSleep() {
   if(shutdownFault)return;
   const SharedState s=snapshot();
   const int64_t mono=esp_timer_get_time();
-  if(shutdownPolicy.update(time(nullptr),mono,trusted(s,mono),manualActive(s,mono)))
+  if(shutdownPolicy.update(time(nullptr),mono,trusted(s,mono),manualActive(s,mono),s.sleepEnabled))
     enterScheduledSleep();
 }
 
-void persistSettings(bool enabled,uint8_t slotMask) {
+bool persistPreference(const char *key,uint8_t value) {
   portENTER_CRITICAL(&stateMux);
   shared.inhibit=true;
   ++shared.generation;
@@ -599,11 +639,35 @@ void persistSettings(bool enabled,uint8_t slotMask) {
     muted=s.appliedGeneration==target && !s.tx.gate;
     if(!muted) delay(1);
   }
-  saveOk=muted && prefsOk && prefs.putUChar("schedule",jjy::packSettings(enabled,slotMask))==1;
+  const bool saved=muted && prefsOk && prefs.putUChar(key,value)==1;
   portENTER_CRITICAL(&stateMux);
   shared.inhibit=false;
   ++shared.generation;
   portEXIT_CRITICAL(&stateMux);
+  return saved;
+}
+void persistSettings(bool enabled,uint8_t slotMask) {
+  saveOk=persistPreference("schedule",jjy::packSettings(enabled,slotMask));
+}
+String setSleepEnabled(bool enabled) {
+  const SharedState s=snapshot();
+  if(s.sleepEnabled!=enabled || !sleepSaveOk) {
+    portENTER_CRITICAL(&stateMux);
+    shared.sleepEnabled=enabled;
+    portEXIT_CRITICAL(&stateMux);
+    sleepSaveOk=persistPreference("deepSleep",enabled?1:0);
+  }
+  if(!sleepSaveOk)return "Setting applied, but SLEEP SAVE FAILED. Check before restart.";
+  return enabled?"Auto Deep Sleep ON: 04:10 MY, after Manual TX finishes.":
+                 "Auto Deep Sleep OFF: device stays awake.";
+}
+String setWakeEnabled(bool enabled) {
+  portENTER_CRITICAL(&stateMux);
+  shared.wakeEnabled=enabled;
+  portEXIT_CRITICAL(&stateMux);
+  savedWakeToken=enabled?daily_shutdown::WAKE_TOKEN:0;
+  return enabled?"Auto Wakeup ON: 23:40 MY when sleeping; resets OFF after power loss or EN/reset.":
+                 "Auto Wakeup OFF: no timer wake; use USB OFF/ON or EN/reset.";
 }
 String setSchedule(uint8_t slotMask) {
   const SharedState s=snapshot();
@@ -624,6 +688,8 @@ String setSchedule(uint8_t slotMask) {
 String action(const String &name) {
   SharedState s=snapshot();
   const int64_t mono=esp_timer_get_time();
+  if(name=="sleep_on" || name=="sleep_off")return setSleepEnabled(name=="sleep_on");
+  if(name=="wake_on" || name=="wake_off")return setWakeEnabled(name=="wake_on");
   if(name=="manual") {
     if(!hardwareOk || s.outputFault || !trusted(s,mono))
       return "ERROR: hardware or NTP not ready.";
@@ -699,6 +765,10 @@ String statusJson() {
   j+=",\"tx\":\""+txState(s,mono,utc)+"\"";
   j+=",\"next\":\""+nextSlot(s,utc)+"\"";
   j+=",\"shutdown\":\""+shutdownStatus()+"\"";
+  j+=",\"sleepEnabled\":"+String(s.sleepEnabled?"true":"false");
+  j+=",\"wakeEnabled\":"+String(s.wakeEnabled?"true":"false");
+  j+=",\"sleepSaved\":"+String(sleepSaveOk?"true":"false");
+  j+=",\"wakeup\":\""+wakeupStatus()+"\"";
   j+=",\"lastNtp\":\""+myTime(s.lastSyncUtc,true)+"\"";
   j+=",\"age\":"+String(static_cast<long>(s.lastSyncUtc?
       (mono-s.lastSyncMono)/1000000:-1));
@@ -743,7 +813,7 @@ input{width:25px;height:25px;accent-color:#58d4be}
 <path d="M9 21h6"></path>
 <path d="M8.4 7.4a5 5 0 0 1 7.2 0"></path>
 </svg></h1>
-<small>JJY 60 kHz &middot; SIRIM / Cloudflare NTP &middot; Malaysia UTC+8 &middot; v0.4.6</small>
+<small>JJY 60 kHz &middot; SIRIM / Cloudflare NTP &middot; Malaysia UTC+8 &middot; v0.4.7</small>
 <p id="connection">Connecting...</p><section>
 <div id="clock">--</div><dl>
 <dt>Wi-Fi / NTP</dt><dd id="net">--</dd>
@@ -752,6 +822,8 @@ input{width:25px;height:25px;accent-color:#58d4be}
 <dt>Mode</dt><dd id="mode">--</dd><dt>TX</dt><dd id="tx">--</dd>
 <dt>Next auto slot</dt><dd id="next">--</dd>
 <dt>Auto sleep (04:10 MY)</dt><dd id="shutdown">--</dd>
+<dt>Wakeup after sleep</dt><dd id="wakeup">--</dd>
+<dt>Saved sleep setting</dt><dd id="sleepSaved">--</dd>
 <dt>Last NTP (MY)</dt><dd id="lastNtp">--</dd>
 <dt>NTP age</dt><dd id="age">--</dd>
 <dt>Manual</dt><dd id="manual">--</dd>
@@ -765,6 +837,19 @@ Auto OFF tidak membatalkan ujian Manual yang sedang berjalan.</p>
 <button id="stop" class="stop" disabled>Stop TX + Auto OFF</button>
 <button id="ntp" disabled>Sync NTP</button></div>
 <p id="message" role="status"></p></section>
+<section><h2>Kuasa · waktu Malaysia</h2>
+<div class="slots">
+<label><input id="autoSleep" type="checkbox" disabled>Auto Deep Sleep · 04:10 pagi</label>
+<label><input id="autoWake" type="checkbox" disabled>Auto Wakeup · 11:40 malam (23:40)</label>
+</div>
+<p class="muted">Auto Deep Sleep disimpan selepas reboot; default OFF.
+Manual TX yang aktif diselesaikan sebelum tidur.</p>
+<p class="muted">Auto Wakeup kekal semasa kitaran deep sleep sahaja.
+Selepas bekalan terputus, EN/reset atau reboot biasa, ia kembali OFF.
+Wakeup berfungsi apabila peranti tidur dan bekalan USB kekal ON.</p>
+<p class="muted">Timer RTC mungkin tersasar sedikit. Selepas bangun, Wi-Fi dan NTP disambung semula.
+Jika Auto Deep Sleep OFF, peranti kekal berjaga walaupun Auto Wakeup ditanda.</p>
+</section>
 <section><h2>Jadual Malaysia (24 jam)</h2>
 <div class="slots">
 <label><input id="slot0" type="checkbox" disabled>23:59–00:07 (hari berikutnya)</label>
@@ -778,8 +863,9 @@ Tandakan semula waktu, kemudian aktifkan Auto jika diperlukan.</p>
 <small>Manual kembali kepada pilihan Auto selepas tamat. Stop disimpan selepas
 restart. Status TX menunjukkan output kod; tiada sensor antena atau pengesahan GET jam.
 Prototaip OOK: minit :15/:45 dilangkau; leap second belum disokong.
-Deep sleep pada 04:10 MY; Manual yang aktif ditunggu hingga tamat.
-Tiada bangun automatik: OFF/ON USB atau tekan EN/reset untuk hidup semula.
+Deep sleep pada 04:10 MY hanya apabila checkbox Auto Deep Sleep ON.
+Manual yang aktif ditunggu hingga tamat. Auto Wakeup ON menjadualkan bangun 23:40 MY;
+jika OFF, gunakan OFF/ON USB atau EN/reset.
 MT3608 dan LED kuasa masih menerima bekalan USB.
 Kawalan untuk rangkaian rumah sahaja.</small>
 </section></main><script>
@@ -790,7 +876,7 @@ let controlRevision=0;
 let lastNtpEvent=null;
 const slotIds=["slot0","slot1","slot2"];
 function selectedMask(){return slotIds.reduce((mask,id,i)=>mask|(el(id).checked?1<<i:0),0)}
-function disableAll(){["auto","start","stop","ntp",...slotIds].forEach(id=>el(id).disabled=true)}
+function disableAll(){["auto","autoSleep","autoWake","start","stop","ntp",...slotIds].forEach(id=>el(id).disabled=true)}
 async function request(path,options={}){
  const controller=new AbortController();
  const timer=setTimeout(()=>controller.abort(),5000);
@@ -818,7 +904,10 @@ async function refresh(){
     el("message").textContent=s.ntpMsg;
     lastNtpEvent=s.ntpEvent;
   }
-  ["mode","tx","next","lastNtp","shutdown"].forEach(k=>el(k).textContent=s[k]);
+  ["mode","tx","next","lastNtp","shutdown","wakeup"].forEach(k=>el(k).textContent=s[k]);
+  el("autoSleep").checked=s.sleepEnabled;
+  el("autoWake").checked=s.wakeEnabled;
+  el("sleepSaved").textContent=s.sleepSaved?"OK":"SAVE ERROR";
   el("age").textContent=s.age<0?"--":s.age+" seconds";
   el("manual").textContent=!s.manual?"Inactive":
     s.wait>0?"Starts in "+s.wait+"s; duration "+s.duration+"s":
@@ -833,6 +922,8 @@ async function refresh(){
   if(!busy){
    el("auto").disabled=s.slotMask===0;
    slotIds.forEach(id=>el(id).disabled=false);
+   el("autoSleep").disabled=false;
+   el("autoWake").disabled=false;
    el("stop").disabled=false;
    el("start").disabled=!s.ntp||!s.hardware||s.manual;
    el("ntp").disabled=!s.wifi;
@@ -870,6 +961,8 @@ async function control(cmd,extra={}){
  }
 }
 el("auto").onchange=()=>control(el("auto").checked?"auto_on":"auto_off");
+el("autoSleep").onchange=()=>control(el("autoSleep").checked?"sleep_on":"sleep_off");
+el("autoWake").onchange=()=>control(el("autoWake").checked?"wake_on":"wake_off");
 slotIds.forEach(id=>el(id).onchange=()=>control("schedule",{mask:String(selectedMask())}));
 el("start").onclick=()=>control("manual");
 el("stop").onclick=()=>control("stop");
@@ -1015,14 +1108,20 @@ void setup() {
   pinMode(26,INPUT);
   pinMode(27,INPUT);
   Serial.begin(115200);
+  shared.wakeEnabled=daily_shutdown::restoreWake(
+    esp_reset_reason()==ESP_RST_DEEPSLEEP,
+    esp_sleep_get_wakeup_cause()==ESP_SLEEP_WAKEUP_TIMER,savedWakeToken);
+  savedWakeToken=shared.wakeEnabled?daily_shutdown::WAKE_TOKEN:0;
   prefsOk=prefs.begin("mb6bypass",false);
   saveOk=prefsOk;
+  sleepSaveOk=prefsOk;
   // Keep the existing namespace to migrate v0.4.4's saved Auto preference.
   // Missing schedule key: select all three times and restore legacy Auto.
   const uint8_t legacy=jjy::packSettings(prefsOk?prefs.getBool("auto",false):false,jjy::ALL_SLOTS);
   const uint8_t settings=prefsOk?prefs.getUChar("schedule",legacy):legacy;
   shared.slotMask=jjy::unpackSlots(settings);
   shared.autoEnabled=jjy::unpackAuto(settings);
+  shared.sleepEnabled=prefsOk && prefs.getUChar("deepSleep",0)==1;
   hardwareOk=ledcSetClockSource(LEDC_USE_APB_CLK)
     && ledcAttachChannel(TX_PIN,CARRIER_HZ,8,0);
   if(hardwareOk) hardwareOk=ledcWrite(TX_PIN,0);
@@ -1057,7 +1156,7 @@ void setup() {
     digitalWrite(TX_PIN,LOW);
   }
   Serial.println(
-    "MB6 TimeSync v0.4.6: open http://IP-on-OLED on your home WiFi.");
+    "MB6 TimeSync v0.4.7: open http://IP-on-OLED on your home WiFi.");
   serialCommand('?');
 }
 void loop() {

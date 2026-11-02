@@ -12,18 +12,20 @@ MB6 TimeSync mendapatkan masa melalui Wi-Fi dan NTP, kemudian menjana isyarat ma
 
 Nama repositori: [`amundead/mb6-timesync-jjy`](https://github.com/amundead/mb6-timesync-jjy).
 
-## Status firmware — v0.4.6, 2 November 2026
+## Status firmware — v0.4.7, 2 November 2026
 
-Branch **[`0.4.6`](https://github.com/amundead/mb6-timesync-jjy/tree/0.4.6)** dibina daripada `0.4.5`. Versi ini menukar PWM LEDC kepada **8-bit** dengan **duty TX 127** dan **idle 0**, untuk ujian konfigurasi **TC4420 + IRFZ44N**. Pembawa nominal kekal **60 kHz** pada **GPIO25**.
+Branch **[`0.4.7`](https://github.com/amundead/mb6-timesync-jjy/tree/0.4.7)** dibina daripada `0.4.6`. Web UI kini mempunyai checkbox **Auto Deep Sleep 04:10 MY** dan **Auto Wakeup 23:40 MY**, dengan simpanan tetapan yang berbeza mengikut fungsi.
 
-### Perubahan v0.4.6
+### Perubahan v0.4.7
 
-- `setup()`: `ledcAttachChannel(TX_PIN,CARRIER_HZ,8,0)` menggantikan resolusi 1-bit.
-- `onEnvelope()`: `ledcWrite(TX_PIN,out.gate?127:0)` menggantikan duty TX 1 pada resolusi lama. Semua laluan mute, Stop dan tidur mengekalkan duty 0.
-- Dalam PWM 8-bit, satu tempoh mempunyai **256 langkah**. Duty **127/256 = 49.609375%**, hampir 50%; nilai tepat 50% ialah 128. Profil v0.4.6 menggunakan nilai **127**.
-- PWM lama 1-bit dengan duty 1 sudah menghasilkan 50% dalam Arduino ESP32 3.3.12. Perubahan ini menambah resolusi dan mengubah duty sedikit; ia bukan bukti bahawa PWM lama rosak atau jarak pancaran akan meningkat.
-- Versi pada komen firmware, Web UI dan Serial ditukar kepada v0.4.6. Komen pendawaian dikemas kini kepada TC4420 + IRFZ44N dan kapasitor semasa.
-- Pilihan waktu sync, penyimpanan Preferences, tempoh Auto/Manual, NTP, OOK dan deep sleep diteruskan daripada v0.4.5.
+- **Auto Deep Sleep** hanya berjalan apabila ditanda. Tetapan disimpan dalam Preferences/NVS, key `deepSleep`, namespace `mb6bypass`. Default pemasangan baharu **dan upgrade daripada 0.4.6 ialah OFF** sehingga pengguna menandanya.
+- **Auto Wakeup** menggunakan timer ESP32 untuk 23:40 waktu Malaysia yang akan datang. Tetapan disimpan dalam RTC sahaja, bukan NVS. Ia kekal merentas bangun timer deep sleep, tetapi kembali **OFF selepas bekalan putus, brownout, EN/reset atau reboot biasa**. Pengguna boleh menandanya semula selepas peranti hidup.
+- Kedua-dua checkbox berasingan. Jika Auto Deep Sleep OFF, peranti kekal berjaga dan timer wakeup tidak digunakan. Jika Auto Deep Sleep ON tetapi Auto Wakeup OFF, peranti tidur tanpa timer bangun.
+- Manual TX yang aktif masih ditunggu hingga tamat. Mematikan Auto Deep Sleep membatalkan jadual/pending sleep. Mengaktifkannya pada/selepas 04:10 menjadualkan 04:10 hari berikutnya.
+- Web UI/API/Serial status JSON menunjukkan kedua-dua pilihan, status simpanan sleep dan sasaran bangun. Kawalan menggunakan POST dengan token/host validation dan perlindungan terhadap polling lama seperti kawalan jadual.
+- Sebelum tidur: TX dibisukan, GPIO25 dipegang LOW dan sumber wakeup lama dinyahaktifkan. Timer 23:40 hanya diaktifkan jika dipilih. Ralat mute, RTC hold, timer stop atau wake timer menghalang masuk deep sleep dan menyekat TX.
+- Selepas timer bangun, ESP32 boot semula, menyambung Wi-Fi, mendapatkan NTP dan memulihkan pilihan Auto TX/slot. Wakeup tidak mengaktifkan Auto TX yang sebelumnya OFF; tiada TX sebelum masa NTP sah.
+- PWM **8-bit, duty 127, idle 0, nominal 60 kHz**, OOK, tempoh TX dan susunan NTP dikekalkan daripada 0.4.6.
 
 ### Sejarah versi
 
@@ -45,6 +47,16 @@ Branch **[`0.4.6`](https://github.com/amundead/mb6-timesync-jjy/tree/0.4.6)** di
 - Menyahpilih waktu yang sedang memancar menghentikan pancaran Auto itu. Sesi Manual yang aktif kekal dijadualkan hingga tamat; penyimpanan tetapan boleh menjeda bingkai semasa sementara output dibisukan.
 - Deep sleep **04:10 MY**, Auto **8 minit**, Manual **10 minit**, serta SIRIM utama / Cloudflare backup diteruskan daripada `0.4.4`.
 
+#### v0.4.6 — PWM LEDC 8-bit
+
+- `setup()`: `ledcAttachChannel(TX_PIN,CARRIER_HZ,8,0)` menggantikan resolusi 1-bit.
+- `onEnvelope()`: `ledcWrite(TX_PIN,out.gate?127:0)` menggantikan duty TX 1 pada resolusi lama. Semua laluan mute, Stop dan tidur mengekalkan duty 0.
+- Dalam PWM 8-bit, satu tempoh mempunyai **256 langkah**. Duty **127/256 = 49.609375%**, hampir 50%; nilai tepat 50% ialah 128. Profil v0.4.6 menggunakan nilai **127**.
+- PWM lama 1-bit dengan duty 1 sudah menghasilkan 50% dalam Arduino ESP32 3.3.12. Perubahan ini menambah resolusi dan mengubah duty sedikit; ia bukan bukti bahawa PWM lama rosak atau jarak pancaran akan meningkat.
+- Versi pada komen firmware, Web UI dan Serial ditukar kepada v0.4.6. Komen pendawaian dikemas kini kepada TC4420 + IRFZ44N dan kapasitor semasa.
+- Pilihan waktu sync, penyimpanan Preferences, tempoh Auto/Manual, NTP, OOK dan deep sleep diteruskan daripada v0.4.5.
+
+
 ### Rekod perkakasan terdahulu
 
 **Ujian pengguna berjaya: jam menunjukkan L3 semasa penerimaan dan GET selepas selesai sync pada jarak sekitar 4 meter.** Pengguna turut melaporkan penerimaan dari bilik lain dengan pintu tertutup. Ini ialah hasil ujian pada pemasangan dan keadaan rumah tersebut; jangkauan untuk pemasangan lain belum disahkan.
@@ -55,14 +67,14 @@ Konfigurasi perkakasan terdahulu menggunakan **USB 5 V → MT3608 sekitar 12 V �
 
 | Perkara | Status |
 | --- | --- |
-| Fail firmware | [`sketch_sep23a2.ino`](./sketch_sep23a2.ino), **v0.4.6**, pilihan waktu sync dan deep sleep berjadual 04:10 MY |
+| Fail firmware | [`sketch_sep23a2.ino`](./sketch_sep23a2.ino), **v0.4.7**, pilihan waktu sync serta checkbox sleep/wakeup |
 | NTP utama | **SIRIM:** `ntp1.sirim.my` |
 | NTP backup | **Cloudflare:** `time.cloudflare.com` |
 | Fallback | Jika SIRIM tiada respons selepas **30 saat**, cuba Cloudflare selama 30 saat. Jika kedua-duanya gagal, tunggu **120 saat** sebelum mencuba semula dari SIRIM. |
 | Paparan NTP | Msg/Web UI, OLED dan Serial menunjukkan pelayan yang sedang dicuba serta sumber sync terakhir |
 | Tempoh dan jadual | Auto **8 minit**, Manual **10 minit**; pilih 23:59, 01:59 dan/atau 03:59 melalui checkbox Web UI |
-| Wi-Fi / sleep | Wi-Fi aktif ketika berjaga. **Deep sleep pada 04:10 MY**; sesi Manual aktif diselesaikan dahulu. Hidup semula melalui OFF/ON USB atau EN/reset; tiada wakeup automatik. |
-| Pengesahan | Ujian host jadual/Web UI lulus. Compile penuh v0.4.6 dan ujian board/penerimaan jam belum dilakukan dalam kemas kini ini. |
+| Wi-Fi / sleep | Wi-Fi aktif ketika berjaga. **Auto Deep Sleep 04:10 MY** hanya jika ditanda; Manual aktif ditunggu. **Auto Wakeup 23:40 MY** pilihan, kembali OFF selepas bekalan putus/reset. |
+| Pengesahan | Ujian host jadual, sleep/wakeup dan Web UI lulus. Compile penuh ESP32 Dev Module lulus; ujian board/penerimaan jam belum dilakukan. |
 
 Firmware repo menggunakan **SIRIM sebagai pelayan utama** dan **Cloudflare sebagai backup**. MY Pool telah dikeluarkan daripada konfigurasi. Ia menggunakan **NTP/SNTP biasa, bukan NTS**. SSID dan kata laluan dalam versi GitHub ialah placeholder yang perlu diisi sebelum upload.
 
@@ -76,8 +88,9 @@ Firmware repo menggunakan **SIRIM sebagai pelayan utama** dan **Cloudflare sebag
 - Web UI untuk pancaran manual, Auto ON/OFF, Stop TX dan permintaan NTP.
 - Pancaran **manual 10 minit** dan **auto 8 minit** setiap sesi.
 - Checkbox setiap waktu sync; tetapan Auto dan pilihan waktu disimpan melalui Preferences.
-- Deep sleep harian pada **04:10 pagi Malaysia**, ditangguh sehingga Manual TX yang aktif tamat.
-- Web UI dan Serial memaparkan waktu tidur seterusnya; tiada bangun automatik.
+- Checkbox Auto Deep Sleep **04:10 pagi Malaysia**, ditangguh sehingga Manual TX aktif tamat; tetapan disimpan dalam NVS.
+- Checkbox Auto Wakeup **23:40 Malaysia**, disimpan dalam RTC semasa deep sleep; OFF selepas bekalan putus atau reset biasa.
+- Web UI dan status JSON/Serial memaparkan waktu tidur dan bangun seterusnya.
 - Kawalan tambahan melalui Serial Monitor.
 - TX ditahan apabila masa NTP belum sah atau sudah melebihi had usia firmware.
 
@@ -351,7 +364,7 @@ Tetapkan dua terminal antena sebagai **T1 = VOUT+ MT3608 sekitar 12 V** dan **T2
 
 Gunakan Arduino IDE dengan:
 
-- Pakej **esp32 by Espressif Systems**, siri **3.x** untuk firmware **v0.4.6** dalam repo.
+- Pakej **esp32 by Espressif Systems**, siri **3.x** untuk firmware **v0.4.7** dalam repo.
 - **Adafruit GFX Library**.
 - **Adafruit SH110X**.
 - **Adafruit BusIO**, jika diminta sebagai dependency.
@@ -396,7 +409,7 @@ Semua waktu jadual berikut ialah **waktu Malaysia, UTC+8**. Waktu tamat ialah pe
 | Auto | 03:59 | 04:07 | 8 minit |
 | Manual | Minit penuh seterusnya selepas arahan diterima | 10 minit selepas mula | 10 minit |
 
-Dalam kod v0.4.6, jadual mula dinyatakan sebagai minit selepas tengah malam:
+Dalam kod v0.4.7, jadual mula dinyatakan sebagai minit selepas tengah malam:
 
 ```cpp
 constexpr int AUTO_START_MINUTES[] = {1439, 119, 239};
@@ -423,11 +436,11 @@ Kejayaan penerimaan pada jam tidak membatalkan jadual berikutnya secara automati
 | --- | --- |
 | Masa OLED dan Web UI | Malaysia, UTC+8 |
 | Jadual Auto | Malaysia, UTC+8 |
-| Data masa dalam bingkai JJY firmware v0.4.6 | Jepun, JST / UTC+9 |
+| Data masa dalam bingkai JJY firmware v0.4.7 | Jepun, JST / UTC+9 |
 
 Tetapan Home City dan penerimaan radio bergantung pada model jam. Semak manual jam sebelum menukar bandar. Jika jam ditetapkan ke Tokyo, data JST biasa akan menghasilkan masa Tokyo, iaitu satu jam mendahului Malaysia.
 
-Pengubahsuaian khas untuk menghantar masa Malaysia kepada jam yang ditetapkan ke Tokyo perlu dibuat pada pengekodan payload. Ia **bukan tetapan lalai** firmware v0.4.6 yang dirujuk dalam README ini.
+Pengubahsuaian khas untuk menghantar masa Malaysia kepada jam yang ditetapkan ke Tokyo perlu dibuat pada pengekodan payload. Ia **bukan tetapan lalai** firmware v0.4.7 yang dirujuk dalam README ini.
 
 ## Penggunaan Web UI
 
@@ -475,7 +488,7 @@ Untuk integrasi, `GET /api/status` menambah `slotMask`: bit 0 = 23:59, bit 1 = 0
 | `Next` | Jadual mula auto seterusnya dalam waktu Malaysia |
 | `Auto sleep (04:10 MY)` / `shutdown` | Tarikh/waktu tidur seterusnya, atau status menunggu sesi Manual |
 
-Firmware v0.4.6 meminta NTP setiap satu jam dan menggunakan had usia masa dua jam. Paparan status TX datang daripada keadaan firmware, bukan sensor RF atau pengukuran antena.
+Firmware v0.4.7 meminta NTP setiap satu jam dan menggunakan had usia masa dua jam. Paparan status TX datang daripada keadaan firmware, bukan sensor RF atau pengukuran antena.
 
 ## Ujian dengan jam
 
@@ -512,30 +525,38 @@ Rekod ini berdasarkan laporan pengguna. Model jam untuk ujian terkini, orientasi
 | Web UI tidak boleh dibuka | Semak IP semasa, rangkaian setempat dan pengasingan peranti pada guest Wi-Fi |
 | Transistor menjadi panas | Hentikan TX dan putuskan kuasa; ukur arus gelung dan semak reka bentuk pemacu |
 
-## Kuasa dan deep sleep pada 04:10 pagi
+## Kuasa: Auto Deep Sleep 04:10 dan Auto Wakeup 23:40 MY
 
-Firmware **v0.4.6** mengekalkan Wi-Fi aktif semasa berjaga dengan `WiFi.setSleep(false)`. ESP32 masuk **deep sleep pada 04:10 waktu Malaysia**, termasuk apabila semua waktu sync dinyahpilih. Sesi **03:59–04:07** hanya berjalan jika waktunya ditanda dan Auto ON.
+Kedua-dua fungsi mempunyai checkbox berasingan dalam Web UI. Waktu ialah **Malaysia UTC+8**. Auto Deep Sleep mesti ditanda untuk menjadualkan tidur; semua pilihan waktu sync kosong atau Auto TX OFF tidak mengubah pilihan kuasa ini.
+
+| Auto Deep Sleep | Auto Wakeup | Hasil |
+| --- | --- | --- |
+| OFF | OFF | Kekal berjaga; tiada tidur atau timer bangun automatik |
+| OFF | ON | Kekal berjaga; pilihan wakeup menunggu sehingga deep sleep diaktifkan |
+| ON | OFF | Tidur pada 04:10 selepas Manual TX tamat; hidupkan semula melalui USB OFF/ON atau EN/reset |
+| ON | ON | Tidur pada 04:10 selepas Manual TX tamat; timer menjadualkan bangun pada 23:40 yang akan datang |
+
+**Auto Deep Sleep disimpan dalam NVS** dan dipulihkan selepas OFF/ON USB. **Auto Wakeup disimpan dalam RTC sahaja**: kekal semasa kitaran deep sleep/timer wake, tetapi kembali OFF selepas bekalan putus atau EN/reset/reboot biasa. Firmware memulihkan wakeup hanya jika sebab reset ialah deep sleep, sumber bangun ialah timer dan token RTC sah. Jika bekalan tiada pada 23:40, ESP32 tidak boleh menghidupkan dirinya sendiri.
+
+Contoh operasi: tandakan kedua-duanya pada waktu malam, tidur 04:10, bangun sekitar 23:40, sambung Wi-Fi/NTP, kemudian jalankan slot 23:59 jika Auto TX ON dan slot itu ditanda. Kitaran ini berulang selagi kuasa kekal dibekalkan. Selepas power cut dan kuasa kembali, peranti boot biasa dengan Auto Wakeup OFF; tandakan semula jika mahu sambung kitaran automatik.
 
 | Keadaan | Tindakan |
 | --- | --- |
-| 04:10 tiba, tiada Manual TX aktif | Hentikan TX, pegang GPIO25 LOW, padam OLED dan matikan Wi-Fi, kemudian deep sleep |
-| Manual TX masih aktif atau menunggu minit mula pada 04:10 | Tunggu sesi Manual tamat; kemudian terus deep sleep |
-| Stop membatalkan Manual selepas waktu tidur telah tiba | Deep sleep selepas pembatalan diproses |
-| Auto OFF / STOPPED tanpa sesi Manual | Masih tidur pada 04:10; pengecualian hanya untuk sesi Manual aktif, bukan Auto OFF sepanjang hari |
-| Boot dan NTP pertama sebelum 04:10 | Jadualkan tidur pada 04:10 yang akan datang |
-| OFF/ON USB atau EN/reset, dengan NTP pertama pada/selepas 04:10 | Kekal berjaga; jadualkan tidur pada 04:10 hari berikutnya |
-| Belum pernah mendapat masa NTP sah sejak boot | Kekal berjaga, menunggu masa sah untuk menetapkan jadual |
-| Wi-Fi/NTP terputus selepas jadual telah ditetapkan | Pemasa monotonik meneruskan jadual; NTP sah seterusnya membetulkan waktu sasaran sebelum ia tiba |
+| Pemasangan baharu / upgrade daripada 0.4.6 | Auto Deep Sleep OFF dan Auto Wakeup OFF; perlukan pilihan pengguna |
+| 04:10 tiba ketika Auto Deep Sleep ON | Tidur jika tiada Manual TX aktif; jika aktif, tunggu sehingga tamat |
+| Auto Deep Sleep dimatikan ketika tidur masih pending kerana Manual | Batalkan pending sleep, kekal berjaga |
+| Auto Deep Sleep diaktifkan pada/selepas 04:10 | Jadualkan tidur pada 04:10 hari berikutnya |
+| Belum mendapat NTP sah sejak boot | Tunggu NTP sebelum menetapkan jadual tidur |
+| Wi-Fi/NTP hilang selepas jadual tidur ditetapkan | Pemasa monotonik meneruskan tidur; wake target dikira daripada jam sistem yang sudah ditetapkan |
+| Manual berlanjutan sehingga selepas 23:40 | Tidur selepas Manual tamat; sasaran wake ialah 23:40 hari berikutnya |
+| Timer bangun | Boot semula, pulihkan tetapan, sambung Wi-Fi/NTP; Auto TX ikut pilihan/slot yang tersimpan |
+| Ralat persediaan tidur/timer | Kekal berjaga dengan TX disekat dan status ralat; tidak tidur dengan timer yang gagal diaktifkan |
 
-Tiada timer bangun, bangun GPIO atau wakeup berjadual diaktifkan. **Web UI tidak boleh dicapai semasa deep sleep**. Untuk hidupkan semula, OFF suis/cabut USB sehingga kuasa benar-benar padam, kemudian ON semula; butang EN/reset juga boleh memulakan boot baharu. Boot memulihkan tetapan Auto dan pilihan waktu daripada Preferences. Sesi Manual tidak disambung selepas reboot.
+**Web UI tidak boleh dicapai semasa deep sleep.** Untuk menukar pilihan ketika itu, hidupkan semula melalui EN/reset atau OFF/ON USB; tindakan tersebut juga menetapkan Auto Wakeup kembali OFF. Timer RTC berasaskan tempoh, bukan alarm kalendar: firmware mengira mikro saat sehingga 23:40 MY seterusnya. Ketepatan sebenar bergantung pada jam RTC dan boleh tersasar; selepas bangun, NTP digunakan semula. Ia bukan jaminan bangun tepat pada saat 23:40:00.
 
-**Deep sleep tidak memutuskan bekalan USB secara fizikal.** MT3608, regulator, antara muka USB dan LED kuasa papan masih boleh menerima kuasa. GPIO25 menggunakan RTC hold LOW supaya transistor tidak dipacu ketika tidur. Firmware tidak mengesahkan bekalan 12 V telah terputus. Untuk memadamkan seluruh perkakasan, kuasa USB perlu diputuskan atau perkakasan pemutus kuasa ditambah.
+**Deep sleep tidak memutuskan bekalan USB.** MT3608 dan LED kuasa papan masih boleh menerima kuasa. GPIO25 dipegang LOW melalui RTC hold supaya TC4420 tidak memacu MOSFET ketika tidur. Firmware tiada perkakasan pemutus bekalan 12 V.
 
-Waktu sasaran ditetapkan selepas NTP pertama yang sah. Contohnya, hidupkan peranti pada 20:00 untuk tidur pada 04:10 esok; hidupkan semula pada 09:00 untuk kekal berjaga sehingga 04:10 hari berikutnya. Pengecualian Manual meliputi sesi 10 minit sahaja; setelah sesi itu tamat, jadual tidur yang telah tiba diteruskan tanpa tambahan masa.
-
-Sebelum tidur, firmware menunggu callback TX mengesahkan output telah dimatikan sebelum menghentikan timer dan memindahkan GPIO25 kepada RTC hold. Jika persediaan tidur gagal, firmware kekal berjaga dengan TX disekat dan memaparkan ralat; ia tidak meneruskan tidur dengan konfigurasi output yang belum disahkan.
-
-## Pengujian v0.4.6
+## Pengujian v0.4.7
 
 Jalankan ujian host dengan Python 3, `g++` dan Node.js:
 
@@ -543,11 +564,13 @@ Jalankan ujian host dengan Python 3, `g++` dan Node.js:
 python3 tests/check_schedule.py
 ```
 
-Ujian menjalankan fungsi sebenar daripada firmware dan JavaScript sebenar daripada Web UI. Liputan merangkumi **8 kombinasi pilihan × 1,440 minit**, tetingkap 23:59 melintasi tengah malam, jadual seterusnya, pengecualian Manual, pemulihan selepas reboot, migrasi Auto lama, semua waktu kosong, memilih semula waktu, Stop, input API tidak sah, kegagalan menyimpan, timeout pembisuan TX, status polling semasa perubahan dan pemulihan sambungan Web UI.
+Ujian menjalankan fungsi sebenar daripada firmware dan JavaScript sebenar daripada Web UI. Liputan merangkumi **8 kombinasi pilihan × 1,440 minit**, tetingkap 23:59 melintasi tengah malam, jadual seterusnya, pengecualian Manual, pemulihan selepas reboot, migrasi Auto lama, semua waktu kosong, memilih semula waktu, Stop, input API tidak sah, kegagalan menyimpan, timeout pembisuan TX, status polling semasa perubahan dan pemulihan sambungan Web UI. Tambahan v0.4.7 menguji default OFF, simpanan sleep selepas reboot/kegagalan NVS, token RTC hanya bagi timer wake, reset/power-on OFF, pembatalan pending sleep, penangguhan Manual, 1,440 waktu bangun, sempadan mikro saat, urutan GPIO LOW/RTC hold serta kegagalan mute/RTC/timer. JavaScript sebenar turut diuji untuk kedua-dua checkbox, POST, status simpanan dan polling lama.
 
-**Rekod compile v0.4.5 (bukan keputusan compile v0.4.6): compile penuh lulus** menggunakan Arduino CLI, board `esp32:esp32:esp32` (ESP32 Dev Module), core **esp32 3.3.12**, Adafruit SH110X **2.1.15**, Adafruit GFX **1.13.0** dan Adafruit BusIO **1.17.4**, dengan `--warnings all`. Saiz sketch **1,018,621 bait (77%)**; pemboleh ubah global **49,836 bait (15%)** untuk konfigurasi build tersebut.
+**Rekod compile v0.4.5 (bukan keputusan compile v0.4.7): compile penuh lulus** menggunakan Arduino CLI, board `esp32:esp32:esp32` (ESP32 Dev Module), core **esp32 3.3.12**, Adafruit SH110X **2.1.15**, Adafruit GFX **1.13.0** dan Adafruit BusIO **1.17.4**, dengan `--warnings all`. Saiz sketch **1,018,621 bait (77%)**; pemboleh ubah global **49,836 bait (15%)** untuk konfigurasi build tersebut.
 
-Compile penuh v0.4.6 belum dijalankan dalam kemas kini ini. Ujian pada board ESP32, ukuran frekuensi/duty sebenar dan penerimaan jam juga belum dilakukan untuk versi ini.
+**Compile penuh v0.4.7 lulus** menggunakan Arduino CLI, board `esp32:esp32:esp32` (ESP32 Dev Module), core **esp32 3.3.12**, Adafruit SH110X **2.1.15**, Adafruit GFX **1.13.0** dan Adafruit BusIO **1.17.4**, dengan `--warnings all`. Sketch **1,022,193 bait (77%)**, global RAM **49,836 bait (15%)**; tiada amaran dilaporkan bagi build ini.
+
+Ujian pada board ESP32, pemutusan bekalan sebenar, ketepatan bangun selepas tidur panjang, ukuran frekuensi/duty dan penerimaan jam belum dilakukan untuk versi ini.
 
 ## Skop dan pembangunan seterusnya
 
@@ -566,6 +589,7 @@ Perkara yang boleh dibangunkan seterusnya:
 
 ## Rujukan
 
+- [Tutorial yang dirujuk: ESP32 deep sleep / timer wake — Random Nerd Tutorials](https://randomnerdtutorials.com/esp32-deep-sleep-arduino-ide-wake-up-sources/)
 - [ESP32 sleep modes — Espressif](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/sleep_modes.html)
 - [GPIO dan RTC hold — Espressif](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/peripherals/gpio.html)
 
