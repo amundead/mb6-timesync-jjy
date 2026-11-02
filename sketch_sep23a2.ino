@@ -1,4 +1,4 @@
-/* MB6 TimeSync v0.4.7 - original ESP32-WROOM, Arduino ESP32 3.x.
+/* MB6 TimeSync v0.4.7-pwm-test - original ESP32-WROOM, Arduino ESP32 3.x.
  * USB 5V powers ESP32/expansion board and MT3608 input.
  * GPIO25 (3.3V) -> 1k resistor -> TC4420 INPUT; INPUT -> 10k -> GND.
  * Same GPIO25 junction -> 220 ohm resistor -> LED anode; cathode -> GND.
@@ -7,7 +7,8 @@
  * MT3608 VOUT+ (~12V) -> LC node T1. Coil (~0.47mH) and capacitors
  * 153 (15nF), 101 (100pF), 221 (220pF) in parallel between T1 and T2.
  * TC4420 bypass: 333 (33nF) + 105 (1uF), in parallel across VDD/GND.
- * 8-bit LEDC: TX duty 127/256 (~49.61%); idle duty 0. Carrier nominal 60kHz.
+ * Diagnostic profile: restore v0.4.5 LEDC (1-bit, duty 1 = 50%, idle 0).
+ * Nominal carrier 60kHz; sleep/wakeup controls remain from v0.4.7.
  * Verify pinout, coil current and Drain peak voltage on actual hardware.
  * OLED SH1106 1.3": VCC 3V3, GND, SDA21, SCL22.
  * WiFi stays ON. Auto windows: 8 minutes. Manual: 10 minutes.
@@ -468,7 +469,7 @@ void onEnvelope(void *) {
     !s.outputFault && txRequested(s,mono,m),s.generation});
   bool fault=false;
   if(out.gate!=gateWasOn) {
-    if(ledcWrite(TX_PIN,out.gate?127:0)) gateWasOn=out.gate;
+    if(ledcWrite(TX_PIN,out.gate?1:0)) gateWasOn=out.gate;
     else {
       ledcWrite(TX_PIN,0);
       gateWasOn=false;
@@ -813,7 +814,7 @@ input{width:25px;height:25px;accent-color:#58d4be}
 <path d="M9 21h6"></path>
 <path d="M8.4 7.4a5 5 0 0 1 7.2 0"></path>
 </svg></h1>
-<small>JJY 60 kHz &middot; SIRIM / Cloudflare NTP &middot; Malaysia UTC+8 &middot; v0.4.7</small>
+<small>JJY 60 kHz &middot; SIRIM / Cloudflare NTP &middot; Malaysia UTC+8 &middot; v0.4.7-pwm-test</small>
 <p id="connection">Connecting...</p><section>
 <div id="clock">--</div><dl>
 <dt>Wi-Fi / NTP</dt><dd id="net">--</dd>
@@ -1123,7 +1124,7 @@ void setup() {
   shared.autoEnabled=jjy::unpackAuto(settings);
   shared.sleepEnabled=prefsOk && prefs.getUChar("deepSleep",0)==1;
   hardwareOk=ledcSetClockSource(LEDC_USE_APB_CLK)
-    && ledcAttachChannel(TX_PIN,CARRIER_HZ,8,0);
+    && ledcAttachChannel(TX_PIN,CARRIER_HZ,1,0);
   if(hardwareOk) hardwareOk=ledcWrite(TX_PIN,0);
   Wire.begin(PIN_SDA,PIN_SCL);
   Wire.setClock(400000);
@@ -1156,7 +1157,7 @@ void setup() {
     digitalWrite(TX_PIN,LOW);
   }
   Serial.println(
-    "MB6 TimeSync v0.4.7: open http://IP-on-OLED on your home WiFi.");
+    "MB6 TimeSync v0.4.7-pwm-test: open http://IP-on-OLED on your home WiFi.");
   serialCommand('?');
 }
 void loop() {

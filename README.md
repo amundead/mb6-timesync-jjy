@@ -12,7 +12,25 @@ MB6 TimeSync mendapatkan masa melalui Wi-Fi dan NTP, kemudian menjana isyarat ma
 
 Nama repositori: [`amundead/mb6-timesync-jjy`](https://github.com/amundead/mb6-timesync-jjy).
 
-## Status firmware — v0.4.7, 2 November 2026
+## Firmware ujian — v0.4.7-pwm-test
+
+Branch **[`0.4.7-pwm-test`](https://github.com/amundead/mb6-timesync-jjy/tree/0.4.7-pwm-test)** ialah profil diagnostik berasaskan `0.4.7`, untuk membandingkan gejala bunyi dan kemungkinan reset yang dilaporkan selepas update daripada `0.4.5`.
+
+- Pulihkan tetapan PWM `0.4.5`: **LEDC 1-bit**, **duty TX 1 (50%)**, **idle 0**, pembawa nominal **60 kHz** pada GPIO25.
+- Kedua-dua checkbox sleep/wakeup, jadual TX, NTP, tempoh Manual dan semua kawalan daripada `0.4.7` dikekalkan. Selain label versi, hanya resolusi dan duty pembawa diubah dalam kod boleh laksana.
+- Ini ujian perbandingan, **bukan pengesahan bahawa PWM 8-bit ialah punca masalah**. Ujian host lulus; profil ini belum di-compile semula atau diuji pada board dalam sesi diagnostik ini.
+
+### Cara bandingkan
+
+1. Kekalkan semua komponen, pendawaian, bekalan USB dan kedudukan antena yang sama.
+2. Upload firmware branch ujian ini, isi Wi-Fi sendiri dan sahkan tajuk Web UI/Serial **v0.4.7-pwm-test**.
+3. Pastikan Manual tidak sedang aktif dan Auto TX OFF, tunggu NTP sah, kemudian tekan Manual. Catat sama ada bunyi berlaku ketika klik, ketika countdown atau ketika TX bermula pada minit berikutnya.
+4. Perhatikan sama ada OLED benar-benar boot semula dan Wi-Fi/NTP bersambung semula, atau hanya paparan berkelip. Jika reset, rekod Serial Monitor **115200 baud** dari sebelum menekan Manual.
+5. Jika gejala hilang, perubahan profil PWM menjadi faktor yang perlu disiasat. Jika kekal, ujian ini belum menerangkan sebabnya; log reset diperlukan untuk langkah seterusnya.
+
+Dokumentasi sejarah di bawah menerangkan versi induk. Untuk branch ujian ini, tetapan PWM aktif ialah **1-bit/duty 1** seperti dinyatakan di atas, menggantikan profil 8-bit/duty 127 versi induk. Branch `0.4.5`, `0.4.6` dan `0.4.7` tidak diubah oleh profil diagnostik ini.
+
+## Versi induk — v0.4.7, 2 November 2026
 
 Branch **[`0.4.7`](https://github.com/amundead/mb6-timesync-jjy/tree/0.4.7)** dibina daripada `0.4.6`. Web UI kini mempunyai checkbox **Auto Deep Sleep 04:10 MY** dan **Auto Wakeup 23:40 MY**, dengan simpanan tetapan yang berbeza mengikut fungsi.
 
@@ -386,8 +404,8 @@ Gunakan Arduino IDE dengan:
    constexpr uint8_t TX_PIN = 25;
    constexpr uint8_t PIN_SDA = 21, PIN_SCL = 22;
    constexpr uint32_t CARRIER_HZ = 60000;
-   // setup(): ledcAttachChannel(TX_PIN, CARRIER_HZ, 8, 0);
-   // onEnvelope(): ledcWrite(TX_PIN, out.gate ? 127 : 0);
+   // Profil ujian: ledcAttachChannel(TX_PIN, CARRIER_HZ, 1, 0);
+   // Profil ujian: ledcWrite(TX_PIN, out.gate ? 1 : 0);
    constexpr int AUTO_TX_MINUTES = 8;
    constexpr int MANUAL_TX_MINUTES = 10;
    ```
