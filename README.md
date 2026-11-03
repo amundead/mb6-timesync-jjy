@@ -25,7 +25,7 @@ Branch **[`0.4.7`](https://github.com/amundead/mb6-timesync-jjy/tree/0.4.7)** di
 - Web UI/API/Serial status JSON menunjukkan kedua-dua pilihan, status simpanan sleep dan sasaran bangun. Kawalan menggunakan POST dengan token/host validation dan perlindungan terhadap polling lama seperti kawalan jadual.
 - Sebelum tidur: TX dibisukan, GPIO25 dipegang LOW dan sumber wakeup lama dinyahaktifkan. Timer 23:40 hanya diaktifkan jika dipilih. Ralat mute, RTC hold, timer stop atau wake timer menghalang masuk deep sleep dan menyekat TX.
 - Selepas timer bangun, ESP32 boot semula, menyambung Wi-Fi, mendapatkan NTP dan memulihkan pilihan Auto TX/slot. Wakeup tidak mengaktifkan Auto TX yang sebelumnya OFF; tiada TX sebelum masa NTP sah.
-- PWM **8-bit, duty 127, idle 0, nominal 60 kHz**, OOK, tempoh TX dan susunan NTP dikekalkan daripada 0.4.6.
+- **Kemas kini 3 November 2026:** PWM 8-bit kini menggunakan **duty TX 128/256 = 50% tepat**, menggantikan 127 (~49.61%). Idle kekal 0 dan pembawa nominal 60 kHz. OOK, jadual, checkbox sleep/wakeup dan susunan NTP kekal.
 
 ### Sejarah versi
 
@@ -387,7 +387,7 @@ Gunakan Arduino IDE dengan:
    constexpr uint8_t PIN_SDA = 21, PIN_SCL = 22;
    constexpr uint32_t CARRIER_HZ = 60000;
    // setup(): ledcAttachChannel(TX_PIN, CARRIER_HZ, 8, 0);
-   // onEnvelope(): ledcWrite(TX_PIN, out.gate ? 127 : 0);
+   // onEnvelope(): ledcWrite(TX_PIN, out.gate ? 128 : 0);
    constexpr int AUTO_TX_MINUTES = 8;
    constexpr int MANUAL_TX_MINUTES = 10;
    ```
@@ -568,7 +568,9 @@ Ujian menjalankan fungsi sebenar daripada firmware dan JavaScript sebenar daripa
 
 **Rekod compile v0.4.5 (bukan keputusan compile v0.4.7): compile penuh lulus** menggunakan Arduino CLI, board `esp32:esp32:esp32` (ESP32 Dev Module), core **esp32 3.3.12**, Adafruit SH110X **2.1.15**, Adafruit GFX **1.13.0** dan Adafruit BusIO **1.17.4**, dengan `--warnings all`. Saiz sketch **1,018,621 bait (77%)**; pemboleh ubah global **49,836 bait (15%)** untuk konfigurasi build tersebut.
 
-**Compile penuh v0.4.7 lulus** menggunakan Arduino CLI, board `esp32:esp32:esp32` (ESP32 Dev Module), core **esp32 3.3.12**, Adafruit SH110X **2.1.15**, Adafruit GFX **1.13.0** dan Adafruit BusIO **1.17.4**, dengan `--warnings all`. Sketch **1,022,193 bait (77%)**, global RAM **49,836 bait (15%)**; tiada amaran dilaporkan bagi build ini.
+**Rekod compile v0.4.7 sebelum perubahan duty 128: lulus** menggunakan Arduino CLI, board `esp32:esp32:esp32` (ESP32 Dev Module), core **esp32 3.3.12**, Adafruit SH110X **2.1.15**, Adafruit GFX **1.13.0** dan Adafruit BusIO **1.17.4**, dengan `--warnings all`. Sketch **1,022,193 bait (77%)**, global RAM **49,836 bait (15%)**; tiada amaran dilaporkan bagi build ini.
+
+**Pengesahan kemas kini duty 128, 3 November 2026:** ujian host jadual, sleep/wakeup dan Web UI lulus. Resolusi 8-bit serta duty 128/256 disemak; compile penuh ESP32 tidak diulang untuk perubahan nilai ini.
 
 Ujian pada board ESP32, pemutusan bekalan sebenar, ketepatan bangun selepas tidur panjang, ukuran frekuensi/duty dan penerimaan jam belum dilakukan untuk versi ini.
 

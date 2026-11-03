@@ -7,7 +7,7 @@
  * MT3608 VOUT+ (~12V) -> LC node T1. Coil (~0.47mH) and capacitors
  * 153 (15nF), 101 (100pF), 221 (220pF) in parallel between T1 and T2.
  * TC4420 bypass: 333 (33nF) + 105 (1uF), in parallel across VDD/GND.
- * 8-bit LEDC: TX duty 127/256 (~49.61%); idle duty 0. Carrier nominal 60kHz.
+ * 8-bit LEDC: TX duty 128/256 (exactly 50%); idle duty 0. Carrier nominal 60kHz.
  * Verify pinout, coil current and Drain peak voltage on actual hardware.
  * OLED SH1106 1.3": VCC 3V3, GND, SDA21, SCL22.
  * WiFi stays ON. Auto windows: 8 minutes. Manual: 10 minutes.
@@ -468,7 +468,7 @@ void onEnvelope(void *) {
     !s.outputFault && txRequested(s,mono,m),s.generation});
   bool fault=false;
   if(out.gate!=gateWasOn) {
-    if(ledcWrite(TX_PIN,out.gate?127:0)) gateWasOn=out.gate;
+    if(ledcWrite(TX_PIN,out.gate?128:0)) gateWasOn=out.gate;
     else {
       ledcWrite(TX_PIN,0);
       gateWasOn=false;
